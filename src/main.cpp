@@ -55,7 +55,7 @@ WDT_timings_t config;
 
 void setup()
 {
-
+  
   config.trigger = 1;            /* in seconds, 0->128 Warning trigger before timeout */
   config.timeout = 2;            /* in seconds, 0->128 Timeout to reset */
   config.callback = wdtCallback; // Callback function to be called on timeout
@@ -65,6 +65,20 @@ void setup()
   CAN_init();
   wdt_software.begin(config);
   // wait for res
+
+  //if problems delete this
+  unsigned long send_time = millis();
+  while (digitalRead(IGN_PIN )== 1)
+  {
+    wdt_software.feed();
+    if(send_time + 100 <= millis()){
+      send_time = millis();
+      uint8_t ign[1] = {0};
+      CAN_MSG_SEND(VCU_IGN, 1, ign);
+    }
+  }
+
+
   do
   {
     wdt_software.feed();
@@ -79,6 +93,8 @@ void setup()
       digitalWrite(HB_LED, !digitalRead(HB_LED));
       HeartBit = millis();
       digitalWrite(Debug_LED2, !digitalRead(Debug_LED2));
+      uint8_t ign[1] = {1};
+      CAN_MSG_SEND(0x99, 1, ign);
     }
 #if SERIAL_DEBUG
     if (DEBUG_TIME + 100 <= millis())
@@ -481,13 +497,16 @@ void median_pressures()
 
 void desigintion_temporary()
 {
-  if (digitalRead(IGN_PIN == 0))
+  if (digitalRead(IGN_PIN )== 0)
   {
     delay(300);
-    if (digitalRead(IGN_PIN == 0))
+    if (digitalRead(IGN_PIN) == 0)
     {
-      SCB_AIRCR = 0x05FA0004; // Software reset
+      uint8_t ign[1] = {0};
+      CAN_MSG_SEND(VCU_IGN, 1, ign);
       digitalWrite(Debug_LED2, HIGH);
+      delay(300);
+      SCB_AIRCR = 0x05FA0004;
     }
   }
 }
