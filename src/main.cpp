@@ -4,17 +4,18 @@
 #include "CAN.h"
 #include "Watchdog_t4.h"
 
-#include <ArduinoJson.h>
 
-#define Pressure_readings_enable 0
-#define SERIAL_DEBUG 0
+#define Pressure_readings_enable 1
+#define SERIAL_DEBUG 1
+
+
 
 void peripheral_init();
 void MS_INT();
 void IGN_INT();
 void reset_debug_leds();
 void desigintion_temporary();
-
+void sendJson();
 #if Pressure_readings_enable
 void Pressure_readings();
 void median_pressures();
@@ -23,7 +24,7 @@ void median_pressures();
 unsigned long watchdog_time = 0;
 volatile uint8_t ignition_signal = 0, ignition_signal_flag = 0;
 volatile int start_signal = 0;
-volatile int status_ASSI = 1;
+volatile int status_ASSI = 0;
 volatile uint8_t mission = 0, mission_flag = 0;
 unsigned long mission_debounce = 0;
 unsigned long mission_update = 0;
@@ -32,7 +33,7 @@ volatile int ASMS_SIGNAL = 0;
 
 #if Pressure_readings_enable
 float EBS_TANK_PRESSURE_A_value = 0, EBS_TANK_PRESSURE_B_value = 0;
-#define PRESSURE_READINGS 12
+#define PRESSURE_READINGS 8
 float EBS_TANK_PRESSURE_A_values[PRESSURE_READINGS], EBS_TANK_PRESSURE_B_values[PRESSURE_READINGS];
 IntervalTimer PRESSURE_TIMER;
 int pointer = 0;
@@ -42,6 +43,8 @@ unsigned long pressure_time = 0;
 unsigned long DEBUG_TIME = 0;
 
 unsigned long wdt_time_update = 0;
+
+unsigned long mission_ign_update;
 
 CAN_message_t Received_CAN_MSG;
 WDT_T4<WDT1> wdt_software;
@@ -55,6 +58,7 @@ WDT_timings_t config;
 
 void setup()
 {
+  unsigned long wdt_hardware_time = 0;
 
   config.trigger = 1;            /* in seconds, 0->128 Warning trigger before timeout */
   config.timeout = 2;            /* in seconds, 0->128 Timeout to reset */
@@ -63,6 +67,7 @@ void setup()
   peripheral_init();
 
   CAN_init();
+  ASSI(status_ASSI);
   wdt_software.begin(config);
   // wait for res
   do
@@ -72,6 +77,11 @@ void setup()
     median_pressures();
 #endif
     Received_CAN_MSG = CAN_MSG_RECEIVE();
+
+    if(wdt_hardware_time + 10 <= millis()){
+      digitalWrite(WDT, !digitalRead(WDT));
+      wdt_hardware_time = millis();
+    }
     mission = 0;
     Mission_Select(mission);
     if (HeartBit + 500 <= millis())
@@ -83,32 +93,8 @@ void setup()
 #if SERIAL_DEBUG
     if (DEBUG_TIME + 100 <= millis())
     {
-#if Pressure_readings_enable
-      StaticJsonDocument<4000> doc;
 
-      // Populate it with data (you can add more fields here dynamically)
-      doc["PB"] = EBS_TANK_PRESSURE_B_value; // Corrected
-      doc["PA"] = EBS_TANK_PRESSURE_A_value;
-      doc["IGN"] = ignition_signal;
-      doc["MISSION"] = mission_flag;
-      doc["ASSI_STATUS"] = status_ASSI;
-      doc["ASMS"] = ASMS_SIGNAL;
-      doc["GO_SIGNAL"] = start_signal;
-      // Serialize the JSON document and send it over serial
-      serializeJson(doc, Serial2);
-      Serial2.println(); // End of message
-#else
-      DynamicJsonDocument doc(256); // Stack allocation with 200 bytes
-
-      // Populate it with data (you can add more fields here dynamically)
-      doc["IGN"] = ignition_signal;
-      doc["MISSION"] = mission_flag;
-      doc["ASSI_STATUS"] = status_ASSI;
-      doc["GO_SIGNAL"] = start_signal;
-      // Serialize the JSON document and send it over serial
-      serializeJson(doc, Serial2);
-      Serial2.println(); // End of message
-#endif
+      sendJson();
 
       DEBUG_TIME = millis();
     }
@@ -126,7 +112,7 @@ void setup()
   // attachInterrupt(digitalPinToInterrupt(IGN), IGN_INT, CHANGE);
 
   //  Waiting for IGNITION SIGNAL 
-  while (ignition_signal_flag == 0)
+  while (ignition_signal_flag == 0 || ignition_signal == 0)
   {
     wdt_software.feed();
     Received_CAN_MSG = CAN_MSG_RECEIVE(); 
@@ -149,33 +135,7 @@ void setup()
 #if SERIAL_DEBUG
       if (DEBUG_TIME + 100 <= millis())
       {
-#if Pressure_readings_enable
-        StaticJsonDocument<4000> doc;
-
-        // Populate it with data (you can add more fields here dynamically)
-        doc["PB"] = EBS_TANK_PRESSURE_B_value; // Corrected
-        doc["PA"] = EBS_TANK_PRESSURE_A_value;
-        doc["IGN"] = ignition_signal_flag;
-        doc["MISSION"] = mission_flag;
-        doc["ASSI_STATUS"] = status_ASSI;
-        doc["ASMS"] = ASMS_SIGNAL;
-        doc["GO_SIGNAL"] = start_signal;
-        // Serialize the JSON document and send it over serial
-        serializeJson(doc, Serial2);
-        Serial2.println(); // End of message
-#else
-        DynamicJsonDocument doc(4000); // Stack allocation with 200 bytes
-
-        // Populate it with data (you can add more fields here dynamically)
-        doc["IGN"] = ignition_signal;
-        doc["MISSION"] = mission_flag;
-        doc["ASSI_STATUS"] = status_ASSI;
-        doc["ASMS"] = ASMS_SIGNAL;
-        doc["GO_SIGNAL"] = start_signal;
-        // Serialize the JSON document and send it over serial
-        serializeJson(doc, Serial2);
-        Serial2.println(); // End of message
-#endif
+        sendJson();
 
         DEBUG_TIME = millis();
       }
@@ -217,57 +177,7 @@ void setup()
   uint8_t ignition_data[1] = {2};
   CAN_MSG_SEND(IGN_TO_ACU, 1, ignition_data);
 
-  /*
-    while (start_signal == 0)
-    {
-
-      wdt_software.feed();
-      desigintion_temporary();
-      #if Pressure_readings_enable
-      median_pressures();
-      #endif
-      if(HeartBit + 500 <= millis()){
-        digitalWrite(HB_LED, !digitalRead(HB_LED));
-        digitalWrite(Debug_LED3, !digitalRead(Debug_LED3));
-        HeartBit = millis();
-      }
-      Received_CAN_MSG = CAN_MSG_RECEIVE();
-      if(Received_CAN_MSG.id == 0x314){
-        start_signal = Received_CAN_MSG.buf[0];
-      }
-      #if SERIAL_DEBUG
-    if(DEBUG_TIME + 100 <= millis()){
-      #if Pressure_readings_enable
-      StaticJsonDocument<4000> doc;
-      // Populate it with data (you can add more fields here dynamically)
-      doc["PB"] = EBS_TANK_PRESSURE_B_value;  // Corrected
-      doc["PA"] = EBS_TANK_PRESSURE_A_value;
-      doc["IGN"] = ignition_signal;
-      doc["MISSION"] = mission_flag;
-      doc["ASSI_STATUS"] = status_ASSI;
-      doc["ASMS"] = ASMS_SIGNAL;
-      doc["GO_SIGNAL"] = start_signal;
-      // Serialize the JSON document and send it over serial
-      serializeJson(doc, Serial2);
-      Serial2.println();  // End of message
-      #else
-      StaticJsonDocument<4000> doc;    // Stack allocation with 200 bytes
-
-      // Populate it with data (you can add more fields here dynamically)
-      doc["IGN"] = ignition_signal;
-      doc["MISSION"] = mission_flag;
-      doc["ASSI_STATUS"] = status_ASSI;
-      doc["ASMS"] = ASMS_SIGNAL;
-      doc["GO_SIGNAL"] = start_signal;
-      // Serialize the JSON document and send it over serial
-      serializeJson(doc, Serial2);
-      Serial2.println();  // End of message
-      #endif
-
-      DEBUG_TIME = millis();
-    }
-    #endif
-    }*/
+  
   wdt_software.feed();
   reset_debug_leds();
 
@@ -298,36 +208,18 @@ void loop()
   }
   Mission_Select(mission);
   ASSI(status_ASSI);
-
+  if(mission_ign_update + 100 <= millis()){
+    if(status_ASSI == 4){
+      uint8_t ignition_data[1] = {0};
+      CAN_MSG_SEND(VCU_IGN, 1, ignition_data);
+      mission_ign_update = millis();
+    }
+    
+  }
 #if SERIAL_DEBUG
   if (DEBUG_TIME + 100 <= millis())
   {
-#if Pressure_readings_enable
-    StaticJsonDocument<4000> doc;
-    // Populate it with data (you can add more fields here dynamically)
-    doc["PB"] = EBS_TANK_PRESSURE_B_value; // Corrected
-    doc["PA"] = EBS_TANK_PRESSURE_A_value;
-    doc["IGN"] = ignition_signal;
-    doc["MISSION"] = mission_flag;
-    doc["ASSI_STATUS"] = status_ASSI;
-    doc["ASMS"] = ASMS_SIGNAL;
-    doc["GO_SIGNAL"] = start_signal;
-    // Serialize the JSON document and send it over serial
-    serializeJson(doc, Serial2);
-    Serial2.println(); // End of message
-// CAN_MSG_SEND(0x2, 1, status_ASSI);
-#else
-    StaticJsonDocument<4000> doc;
-
-    // Populate it with data (you can add more fields here dynamically)
-    doc["IGN"] = ignition_signal;
-    doc["MISSION"] = mission_flag;
-    doc["ASSI_STATUS"] = status_ASSI;
-    doc["ASMS"] = ASMS_SIGNAL;
-    // Serialize the JSON document and send it over serial
-    serializeJson(doc, Serial2);
-    Serial2.println(); // End of message
-#endif
+    void sendJson();
 
     DEBUG_TIME = millis();
   }
@@ -376,9 +268,13 @@ void peripheral_init()
 
   pinMode(ASMS, INPUT);
   pinMode(IGN_PIN, INPUT);
-#if SERIAL_DEBUG
+
   Serial2.begin(115200);
+
+#if SERIAL_DEBUG
+  
 #endif
+
 // CAN_TIMER.begin(send_can_msg,200000);  // 200ms // tempo em us
 #if Pressure_readings_enable
   PRESSURE_TIMER.begin(Pressure_readings, 100000); // 100ms
@@ -473,8 +369,8 @@ void median_pressures()
     }
     EBS_TANK_PRESSURE_A_value = EBS_TANK_PRESSURE_A_value / PRESSURE_READINGS;
     EBS_TANK_PRESSURE_B_value = EBS_TANK_PRESSURE_B_value / PRESSURE_READINGS;
-    EBS_TANK_PRESSURE_A_value = 2.5 * EBS_TANK_PRESSURE_A_value - 1.25;
-    EBS_TANK_PRESSURE_B_value = 2.5 * EBS_TANK_PRESSURE_B_value - 1.25;
+    EBS_TANK_PRESSURE_A_value = 0.280851064 * EBS_TANK_PRESSURE_A_value - 0.351063830;
+    EBS_TANK_PRESSURE_B_value = 0.280851064 * EBS_TANK_PRESSURE_B_value + 0.351063830;
   }
 #endif
 }
@@ -494,3 +390,24 @@ void desigintion_temporary()
 
 
 
+
+
+
+
+void sendJson() {
+  // Start building the JSON string
+  String json = "{";
+  #if Pressure_readings_enable
+  json += "\"PB\": " + String(EBS_TANK_PRESSURE_B_value) + ", ";
+  json += "\"PA\": " + String(EBS_TANK_PRESSURE_A_value) + ", ";
+  #endif
+  json += "\"IGN\": " + String(ignition_signal && ignition_signal_flag ? "true" : "false") + ", ";
+  json += "\"MISSION\": " + String(mission_flag) + ", ";
+  json += "\"ASSI_STATUS\": " + String(status_ASSI) + ", ";
+  json += "\"ASMS\": " + String(ASMS_SIGNAL) + ", ";
+  json += "\"GO_SIGNAL\": " + String(start_signal ? "true" : "false");
+  json += "}";
+
+  // Send the JSON string over Serial2
+  Serial2.println(json); // Send the JSON message
+}

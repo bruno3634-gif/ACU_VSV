@@ -12,16 +12,16 @@ int ASSI(int ASSI_status){
   switch (ASSI_status)
   {
   case 1:
-    digitalWrite(YELLOW_LEDS, LOW);
-    digitalWrite(BLUE_LEDS, LOW);
-    //digitalWrite(YELLOW_LEDS, HIGH);
+    //digitalWrite(YELLOW_LEDS, LOW);
     //digitalWrite(BLUE_LEDS, LOW);
-    break;
-  case 2:
     digitalWrite(YELLOW_LEDS, HIGH);
     digitalWrite(BLUE_LEDS, LOW);
-    //digitalWrite(YELLOW_LEDS, LOW);
-    //digitalWrite(BLUE_LEDS, HIGH);
+    break;
+  case 2:
+    //digitalWrite(YELLOW_LEDS, HIGH);
+    //digitalWrite(BLUE_LEDS, LOW);
+    digitalWrite(YELLOW_LEDS, LOW);
+    digitalWrite(BLUE_LEDS, HIGH);
     break;
   case 3:
   digitalWrite(BLUE_LEDS, LOW); 
@@ -32,8 +32,8 @@ int ASSI(int ASSI_status){
   }
     break;
     case 4:
-    digitalWrite(YELLOW_LEDS, LOW);
-    //digitalWrite(YELLOW_LEDS, HIGH);
+    //digitalWrite(YELLOW_LEDS, LOW);
+    digitalWrite(YELLOW_LEDS, HIGH);
     if (millis() - ASSI_BLUE_time  >= 500)
     {
       ASSI_BLUE_time = millis();
@@ -41,17 +41,17 @@ int ASSI(int ASSI_status){
     }    
     break;
     case 5:
-    digitalWrite(YELLOW_LEDS, LOW);
-    digitalWrite(BLUE_LEDS, HIGH);
-   // digitalWrite(YELLOW_LEDS, HIGH);
-   // digitalWrite(BLUE_LEDS, LOW);
+    //digitalWrite(YELLOW_LEDS, LOW);
+    //digitalWrite(BLUE_LEDS, HIGH);
+    digitalWrite(YELLOW_LEDS, HIGH);
+    digitalWrite(BLUE_LEDS, LOW);
     break;
 
   default:
-  digitalWrite(YELLOW_LEDS, LOW);
-  digitalWrite(BLUE_LEDS, LOW);
-  //digitalWrite(YELLOW_LEDS, HIGH);
-  //digitalWrite(BLUE_LEDS, HIGH);
+  //digitalWrite(YELLOW_LEDS, LOW);
+  //digitalWrite(BLUE_LEDS, LOW);
+  digitalWrite(YELLOW_LEDS, HIGH);
+  digitalWrite(BLUE_LEDS, HIGH);
   //Serial.println("ASSI Status not defined");
     break;
   }
