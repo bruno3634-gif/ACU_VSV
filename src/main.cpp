@@ -68,10 +68,16 @@ void setup()
 
   CAN_init();
   ASSI(status_ASSI);
+  while (digitalRead(IGN_PIN) == 1)
+  {
+    delay(50);
+  }
+  
   wdt_software.begin(config);
   // wait for res
   do
   {
+    ASSI(status_ASSI);
     wdt_software.feed();
 #if Pressure_readings_enable
     median_pressures();
@@ -114,6 +120,7 @@ void setup()
   //  Waiting for IGNITION SIGNAL 
   while (ignition_signal_flag == 0 || ignition_signal == 0)
   {
+    ASSI(status_ASSI);
     wdt_software.feed();
     Received_CAN_MSG = CAN_MSG_RECEIVE(); 
     if (Received_CAN_MSG.id == IGN_FROM_VCU)
@@ -187,6 +194,7 @@ void setup()
 
 void loop()
 {
+
   desigintion_temporary();
   wdt_software.feed();
 #if Pressure_readings_enable
@@ -202,6 +210,12 @@ void loop()
     CAN_MSG_SEND(0x99, 1, dummy_data);
   }
   Received_CAN_MSG = CAN_MSG_RECEIVE();
+ 
+  if (Received_CAN_MSG.id == 0x502)
+  {
+    Serial2.println(Received_CAN_MSG.id);
+    Serial2.println(Received_CAN_MSG.buf[0]);
+  }
   if (Received_CAN_MSG.id == JETSON_AMS)
   {
     status_ASSI = Received_CAN_MSG.buf[0];

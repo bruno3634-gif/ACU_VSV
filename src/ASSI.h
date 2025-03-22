@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include "definitions.h"
+#include <Adafruit_NeoPixel.h>
 
 /*  --  ASSI Variables  --  */
 //extern volatile int ASSI_status;
