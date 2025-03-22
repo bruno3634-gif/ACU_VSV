@@ -4,11 +4,10 @@
 #include "CAN.h"
 #include "Watchdog_t4.h"
 
+#define Pressure_readings_enable 0
+#define SERIAL_DEBUG 0
 
-#define Pressure_readings_enable 1
-#define SERIAL_DEBUG 1
-
-
+unsigned long canPrint_Millis=0;
 
 void peripheral_init();
 void MS_INT();
@@ -72,7 +71,7 @@ void setup()
   {
     delay(50);
   }
-  
+
   wdt_software.begin(config);
   // wait for res
   do
@@ -84,7 +83,8 @@ void setup()
 #endif
     Received_CAN_MSG = CAN_MSG_RECEIVE();
 
-    if(wdt_hardware_time + 10 <= millis()){
+    if (wdt_hardware_time + 10 <= millis())
+    {
       digitalWrite(WDT, !digitalRead(WDT));
       wdt_hardware_time = millis();
     }
@@ -108,7 +108,6 @@ void setup()
 
   } while (Received_CAN_MSG.id != RES_ID);
 
-  
   wdt_software.feed();
   reset_debug_leds();
   wdt_software.feed();
@@ -117,12 +116,12 @@ void setup()
   attachInterrupt(digitalPinToInterrupt(MS_BUTTON1), MS_INT, FALLING);
   // attachInterrupt(digitalPinToInterrupt(IGN), IGN_INT, CHANGE);
 
-  //  Waiting for IGNITION SIGNAL 
+  //  Waiting for IGNITION SIGNAL
   while (ignition_signal_flag == 0 || ignition_signal == 0)
   {
     ASSI(status_ASSI);
     wdt_software.feed();
-    Received_CAN_MSG = CAN_MSG_RECEIVE(); 
+    Received_CAN_MSG = CAN_MSG_RECEIVE();
     if (Received_CAN_MSG.id == IGN_FROM_VCU)
     {
       ignition_signal_flag = Received_CAN_MSG.buf[0];
@@ -184,7 +183,6 @@ void setup()
   uint8_t ignition_data[1] = {2};
   CAN_MSG_SEND(IGN_TO_ACU, 1, ignition_data);
 
-  
   wdt_software.feed();
   reset_debug_leds();
 
@@ -195,13 +193,14 @@ void setup()
 void loop()
 {
 
-  desigintion_temporary();
+  // desigintion_temporary();
   wdt_software.feed();
 #if Pressure_readings_enable
   median_pressures();
 #endif
   if (HeartBit + 500 <= millis())
   {
+    //Serial2.println("Status: " + String(status_ASSI));
     digitalWrite(HB_LED, !digitalRead(HB_LED));
     digitalWrite(Debug_LED4, !digitalRead(Debug_LED4));
     digitalWrite(Debug_LED6, !digitalRead(Debug_LED4));
@@ -210,26 +209,34 @@ void loop()
     CAN_MSG_SEND(0x99, 1, dummy_data);
   }
   Received_CAN_MSG = CAN_MSG_RECEIVE();
- 
-  if (Received_CAN_MSG.id == 0x502)
+
+  if(canPrint_Millis + 100 <= millis())
   {
-    Serial2.println(Received_CAN_MSG.id);
-    Serial2.println(Received_CAN_MSG.buf[0]);
+    Serial2.println("ID:" + String(Received_CAN_MSG.id) + " Data: " + String(Received_CAN_MSG.buf[0]));
+    canPrint_Millis = millis();
   }
+
   if (Received_CAN_MSG.id == JETSON_AMS)
   {
+    //Serial2.println(Received_CAN_MSG.id);
+    //Serial2.println(Received_CAN_MSG.buf[0]);
     status_ASSI = Received_CAN_MSG.buf[0];
   }
-  Mission_Select(mission);
-  ASSI(status_ASSI);
-  if(mission_ign_update + 100 <= millis()){
-    if(status_ASSI == 4){
+
+  if (mission_ign_update + 100 <= millis())
+  {
+    Mission_Select(mission);
+
+    ASSI(status_ASSI);
+    
+    if (status_ASSI == 4)
+    {
       uint8_t ignition_data[1] = {0};
       CAN_MSG_SEND(VCU_IGN, 1, ignition_data);
       mission_ign_update = millis();
     }
-    
   }
+
 #if SERIAL_DEBUG
   if (DEBUG_TIME + 100 <= millis())
   {
@@ -286,7 +293,7 @@ void peripheral_init()
   Serial2.begin(115200);
 
 #if SERIAL_DEBUG
-  
+
 #endif
 
 // CAN_TIMER.begin(send_can_msg,200000);  // 200ms // tempo em us
@@ -294,8 +301,6 @@ void peripheral_init()
   PRESSURE_TIMER.begin(Pressure_readings, 100000); // 100ms
 #endif
 }
-
-
 
 void MS_INT()
 {
@@ -402,19 +407,14 @@ void desigintion_temporary()
   }
 }
 
-
-
-
-
-
-
-void sendJson() {
+void sendJson()
+{
   // Start building the JSON string
   String json = "{";
-  #if Pressure_readings_enable
+#if Pressure_readings_enable
   json += "\"PB\": " + String(EBS_TANK_PRESSURE_B_value) + ", ";
   json += "\"PA\": " + String(EBS_TANK_PRESSURE_A_value) + ", ";
-  #endif
+#endif
   json += "\"IGN\": " + String(ignition_signal && ignition_signal_flag ? "true" : "false") + ", ";
   json += "\"MISSION\": " + String(mission_flag) + ", ";
   json += "\"ASSI_STATUS\": " + String(status_ASSI) + ", ";
