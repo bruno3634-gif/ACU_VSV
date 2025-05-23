@@ -7,7 +7,7 @@
 
 #define Pressure_readings_enable 1
 #define SERIAL_DEBUG 0
-#define RESET_TIMEOUT 3000  // ms to hold button for reset
+#define RESET_TIMEOUT 1000  // ms to hold button for reset
 
 unsigned long canPrint_Millis=0;
 
@@ -30,7 +30,7 @@ volatile uint8_t mission = 0, mission_flag = 0;
 unsigned long mission_debounce = 0;
 unsigned long mission_update = 0;
 unsigned long HeartBit = 0;
-volatile int ASMS_SIGNAL = 0;
+volatile uint8_t ASMS_SIGNAL = 0;
 
 #if Pressure_readings_enable
 float EBS_TANK_PRESSURE_A_value = 0, EBS_TANK_PRESSURE_B_value = 0;
@@ -64,9 +64,11 @@ void wdtCallback()
 void send_can_msg();
 
 WDT_timings_t config;
+volatile int ign_en = 0; 
 
 void setup()
 {
+  ignition_signal = 0;
   peripheral_init();
   // At the beginning of setup
   uint8_t resetReason = 0;
@@ -79,7 +81,6 @@ void setup()
   }
   Serial.println("System boot - Reset reason: " + String(resetReason));
   
-  unsigned long wdt_hardware_time = 0;
 
   config.trigger = 1;            /* in seconds, 0->128 Warning trigger before timeout */
   config.timeout = 2;            /* in seconds, 0->128 Timeout to reset */
@@ -110,10 +111,6 @@ void setup()
     Serial.println("Waiting for RES");
 
 
-    uint8_t mission_data[1] = {1};
-      CAN_MSG_SEND(0x355, 1, mission_data);
-
-
     ASSI(status_ASSI);
     wdt_software.feed();
 #if Pressure_readings_enable
@@ -137,6 +134,7 @@ void setup()
       HeartBit = millis();
       digitalWrite(Debug_LED2, !digitalRead(Debug_LED2));
     }
+    ign_en = 0;
 #if SERIAL_DEBUG
     if (DEBUG_TIME + 100 <= millis())
     {
@@ -147,8 +145,8 @@ void setup()
     }
 #endif
 
-  } while (Received_CAN_MSG.id != RES_ID);
-
+  } while (Received_CAN_MSG.id != RES_ID && digitalRead(ASMS) == 0);  // switch to || fo vsv
+ign_en = 1;
   wdt_software.feed();
   reset_debug_leds();
   wdt_software.feed();
@@ -172,21 +170,8 @@ void setup()
 #endif
     if (mission_update + 100 <= millis())
     {
-      uint8_t mission_data[1] = {mission_flag};
-      CAN_MSG_SEND(ACU_MS, 1, mission_data);
       mission_update = millis();
       digitalWrite(Debug_LED5, !digitalRead(Debug_LED5));
-      uint8_t ignition_data[1] = {ignition_signal};
-      CAN_MSG_SEND(VCU_IGN, 1, ignition_data);
-
-#if SERIAL_DEBUG
-      if (DEBUG_TIME + 100 <= millis())
-      {
-        sendJson();
-
-        DEBUG_TIME = millis();
-      }
-#endif
     }
 
     // Received_CAN_MSG = CAN_MSG_RECEIVE();
@@ -271,8 +256,6 @@ void loop()
     
     if (status_ASSI == 4)
     {
-      uint8_t ignition_data[1] = {0};
-      CAN_MSG_SEND(VCU_IGN, 1, ignition_data);
       mission_ign_update = millis();
     }
   }
@@ -341,9 +324,9 @@ void peripheral_init()
 #if Pressure_readings_enable
   PRESSURE_TIMER.begin(Pressure_readings, 100000); // 100ms
 #endif
- CAN_TO_VCU.begin(send_can_msg, 100000); // 100ms
-  // CAN_TO_VCU.begin(send_can_msg, 200000); // 200ms
-  // CAN_TO_VCU.begin(send_can_msg, 500000); // 500ms
+ CAN_TO_VCU.begin(send_can_msg, 100000);      // 100ms
+  // CAN_TO_VCU.begin(send_can_msg, 200000);  // 200ms
+  // CAN_TO_VCU.begin(send_can_msg, 500000);  // 500ms
   // CAN_TO_VCU.begin(send_can_msg, 1000000); // 1s   
 }
 
@@ -381,7 +364,7 @@ void IGN_INT()
       watchdog_time = millis();
     }*/
   }
-  if (digitalRead(IGN_PIN) == 1)
+  if (digitalRead(IGN_PIN) == 1 && ign_en == 1)
   {
     ignition_signal = 1;
   }
@@ -442,29 +425,13 @@ void median_pressures()
 void performSystemReset(uint8_t reason) {
   Serial2.println("PERFORMING SYSTEM RESET - Reason: " + String(reason));
   
-  // 1. Visual indication of reset
-  for (int i = 0; i < 5; i++) {
-    digitalWrite(HB_LED, HIGH);
-    digitalWrite(Debug_LED2, HIGH);
-    digitalWrite(Debug_LED3, HIGH);
-    digitalWrite(Debug_LED4, HIGH);
-    digitalWrite(Debug_LED5, HIGH);
-    digitalWrite(Debug_LED6, HIGH);
-    delay(50);
-    digitalWrite(HB_LED, LOW);
-    digitalWrite(Debug_LED2, LOW);
-    digitalWrite(Debug_LED3, LOW);
-    digitalWrite(Debug_LED4, LOW);
-    digitalWrite(Debug_LED5, LOW);
-    digitalWrite(Debug_LED6, LOW);
-    delay(50);
-  }
+
   
   // 2. Send reset notification over CAN
-  uint8_t reset_data[2] = {0xAA, reason};
-  CAN_MSG_SEND(0x501, 2, reset_data);  // Use appropriate ID
+  uint8_t reset_data[1] = {};
+  CAN_MSG_SEND(VCU_IGN ,1, reset_data);  // Use appropriate ID
   
-  // 3. Safety shutdown - clean state
+  // 3. Safety shutdown - clean state0
   ignition_signal = 0;
   ignition_signal_flag = 0;
   ASMS_SIGNAL = 0;
@@ -498,8 +465,8 @@ void checkForResetRequest() {
   }
   
   // Method 2: CAN command reset
-  if (Received_CAN_MSG.id == 0x505) {  // Choose appropriate ID
-    if (Received_CAN_MSG.buf[0] == 0x55 && Received_CAN_MSG.buf[1] == 0xAA) {
+  if (Received_CAN_MSG.id == IGN_FROM_VCU) {  // Choose appropriate ID
+    if (Received_CAN_MSG.buf[0] == 0x00) {
       performSystemReset(2);  // Reason 2: Remote CAN reset
     }
   }
@@ -524,6 +491,39 @@ void sendJson()
   Serial2.println(json); // Send the JSON message
 }
 
-void send_can_msg(){
+void send_can_msg() {
+  // Debounce the ignition pin reading
+  static uint8_t ignition_readings[3] = {0, 0, 0};
+  static uint8_t reading_index = 0;
   
+  // Add new reading to the buffer
+  ignition_readings[reading_index] = digitalRead(IGN_PIN);
+  reading_index = (reading_index + 1) % 3;
+  
+  // Only change state if all readings agree
+  uint8_t stable_reading = (ignition_readings[0] == ignition_readings[1] && 
+                           ignition_readings[1] == ignition_readings[2]) ? 
+                           ignition_readings[0] : ignition_signal;
+  
+  // Update global state if it has stabilized
+  if (stable_reading != ignition_signal) {
+    ignition_signal = stable_reading;
+  }
+  
+  // Prepare message data
+  uint8_t ignition_data[2] = {0,ASMS_SIGNAL};
+  
+  // Apply the same logic as before
+  if (!ignition_signal || ign_en == 0) {
+    ignition_data[0] = 0;
+  } else {
+    ignition_data[0] = ignition_signal;
+  }
+  
+  // Send ignition message
+  CAN_MSG_SEND(VCU_IGN, 2, ignition_data);
+  
+  // Also periodically send mission status
+  uint8_t mission_data[1] = {mission_flag};
+  CAN_MSG_SEND(ACU_MS, 1, mission_data);
 }
