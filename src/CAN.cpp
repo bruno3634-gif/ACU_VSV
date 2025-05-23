@@ -33,9 +33,23 @@ CAN_message_t msg;
 }
 
 
-CAN_message_t CAN_MSG_RECEIVE(){
+/*CAN_message_t CAN_MSG_RECEIVE(){
   CAN_message_t msg;
   can2.read(msg);
   return msg;
   
+}*/
+
+CAN_message_t CAN_MSG_RECEIVE(){
+  CAN_message_t msg;
+  
+  // Try to read a message
+  bool messageReceived = can2.read(msg);
+  
+  // If no message was received, set id to 0 (which isn't a valid CAN ID in your system)
+  if (!messageReceived) {
+    msg.id = 0; // Special "no message" indicator
+  }
+  
+  return msg;
 }

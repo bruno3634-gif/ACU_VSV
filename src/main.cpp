@@ -3,9 +3,11 @@
 #include "ASSI.h"
 #include "CAN.h"
 #include "Watchdog_t4.h"
+#include "autonomous_temporary.h"
 
-#define Pressure_readings_enable 0
+#define Pressure_readings_enable 1
 #define SERIAL_DEBUG 0
+#define RESET_TIMEOUT 3000  // ms to hold button for reset
 
 unsigned long canPrint_Millis=0;
 
@@ -13,7 +15,7 @@ void peripheral_init();
 void MS_INT();
 void IGN_INT();
 void reset_debug_leds();
-void desigintion_temporary();
+void checkForResetRequest();
 void sendJson();
 #if Pressure_readings_enable
 void Pressure_readings();
@@ -35,6 +37,9 @@ float EBS_TANK_PRESSURE_A_value = 0, EBS_TANK_PRESSURE_B_value = 0;
 #define PRESSURE_READINGS 8
 float EBS_TANK_PRESSURE_A_values[PRESSURE_READINGS], EBS_TANK_PRESSURE_B_values[PRESSURE_READINGS];
 IntervalTimer PRESSURE_TIMER;
+
+IntervalTimer CAN_TO_VCU;
+
 int pointer = 0;
 unsigned long pressure_time = 0;
 #endif
@@ -48,46 +53,82 @@ unsigned long mission_ign_update;
 CAN_message_t Received_CAN_MSG;
 WDT_T4<WDT1> wdt_software;
 
+unsigned long reset_button_press_time = 0;
+bool reset_in_progress = false;
+
 void wdtCallback()
 {
   digitalWrite(Debug_LED6, HIGH);
 }
 
+void send_can_msg();
+
 WDT_timings_t config;
 
 void setup()
 {
+  peripheral_init();
+  // At the beginning of setup
+  uint8_t resetReason = 0;
+  if (CrashReport) {
+    resetReason = 0x10;  // Crash-induced reset
+    Serial.println("System recovered from crash!");
+  } else {
+    resetReason = 0x20;  // Normal power-on reset
+    Serial.println("System boot normally!");
+  }
+  Serial.println("System boot - Reset reason: " + String(resetReason));
+  
   unsigned long wdt_hardware_time = 0;
 
   config.trigger = 1;            /* in seconds, 0->128 Warning trigger before timeout */
   config.timeout = 2;            /* in seconds, 0->128 Timeout to reset */
   config.callback = wdtCallback; // Callback function to be called on timeout
 
-  peripheral_init();
-
+  
+  
   CAN_init();
   ASSI(status_ASSI);
+  /*
   while (digitalRead(IGN_PIN) == 1)
   {
-    delay(50);
-  }
+    wdt_software.feed();
+    Serial2.println("Waiting for ignition signal");
+    delay(100);
 
-  wdt_software.begin(config);
+  }
+*/
+  wdt_software.begin(config);  
+  wdt_software.feed();                               
   // wait for res
   do
   {
+    if(CrashReport)
+    {
+      Serial.print(CrashReport);
+    }
+    Serial.println("Waiting for RES");
+
+
+    uint8_t mission_data[1] = {1};
+      CAN_MSG_SEND(0x355, 1, mission_data);
+
+
     ASSI(status_ASSI);
     wdt_software.feed();
 #if Pressure_readings_enable
     median_pressures();
 #endif
-    Received_CAN_MSG = CAN_MSG_RECEIVE();
-
-    if (wdt_hardware_time + 10 <= millis())
+/*if (wdt_hardware_time + 10 <= millis())
     {
+      Serial2.println(millis()-wdt_hardware_time);
       digitalWrite(WDT, !digitalRead(WDT));
       wdt_hardware_time = millis();
-    }
+      Serial2.println("WDT");
+    }*/
+    Received_CAN_MSG = CAN_MSG_RECEIVE();
+
+
     mission = 0;
     Mission_Select(mission);
     if (HeartBit + 500 <= millis())
@@ -192,8 +233,7 @@ void setup()
 
 void loop()
 {
-
-  // desigintion_temporary();
+  checkForResetRequest();
   wdt_software.feed();
 #if Pressure_readings_enable
   median_pressures();
@@ -212,7 +252,7 @@ void loop()
 
   if(canPrint_Millis + 100 <= millis())
   {
-    Serial2.println("ID:" + String(Received_CAN_MSG.id) + " Data: " + String(Received_CAN_MSG.buf[0]));
+    Serial.println("ID:" + String(Received_CAN_MSG.id) + " Data: " + String(Received_CAN_MSG.buf[0]));
     canPrint_Millis = millis();
   }
 
@@ -291,6 +331,7 @@ void peripheral_init()
   pinMode(IGN_PIN, INPUT);
 
   Serial2.begin(115200);
+  Serial.begin(115200);
 
 #if SERIAL_DEBUG
 
@@ -300,6 +341,10 @@ void peripheral_init()
 #if Pressure_readings_enable
   PRESSURE_TIMER.begin(Pressure_readings, 100000); // 100ms
 #endif
+ CAN_TO_VCU.begin(send_can_msg, 100000); // 100ms
+  // CAN_TO_VCU.begin(send_can_msg, 200000); // 200ms
+  // CAN_TO_VCU.begin(send_can_msg, 500000); // 500ms
+  // CAN_TO_VCU.begin(send_can_msg, 1000000); // 1s   
 }
 
 void MS_INT()
@@ -307,12 +352,12 @@ void MS_INT()
   mission_debounce = millis();
   while (millis() - mission_debounce < 150)
   {
-    if (watchdog_time + 10 <= millis())
+   /* if (watchdog_time + 10 <= millis())
     {
       watchdog_time = millis();
       digitalWrite(WDT, !digitalRead(WDT));
       watchdog_time = millis();
-    }
+    }*/
   }
   if (digitalRead(MS_BUTTON1) == 0)
   {
@@ -329,12 +374,12 @@ void IGN_INT()
   unsigned long IGN_debounce = millis();
   while (millis() - IGN_debounce < 200)
   {
-    if (watchdog_time + 10 <= millis())
+    /*if (watchdog_time + 10 <= millis())
     {
       watchdog_time = millis();
       digitalWrite(WDT, !digitalRead(WDT));
       watchdog_time = millis();
-    }
+    }*/
   }
   if (digitalRead(IGN_PIN) == 1)
   {
@@ -394,15 +439,68 @@ void median_pressures()
 #endif
 }
 
-void desigintion_temporary()
-{
-  if (digitalRead(IGN_PIN == 0))
-  {
-    delay(300);
-    if (digitalRead(IGN_PIN == 0))
-    {
-      SCB_AIRCR = 0x05FA0004; // Software reset
-      digitalWrite(Debug_LED2, HIGH);
+void performSystemReset(uint8_t reason) {
+  Serial2.println("PERFORMING SYSTEM RESET - Reason: " + String(reason));
+  
+  // 1. Visual indication of reset
+  for (int i = 0; i < 5; i++) {
+    digitalWrite(HB_LED, HIGH);
+    digitalWrite(Debug_LED2, HIGH);
+    digitalWrite(Debug_LED3, HIGH);
+    digitalWrite(Debug_LED4, HIGH);
+    digitalWrite(Debug_LED5, HIGH);
+    digitalWrite(Debug_LED6, HIGH);
+    delay(50);
+    digitalWrite(HB_LED, LOW);
+    digitalWrite(Debug_LED2, LOW);
+    digitalWrite(Debug_LED3, LOW);
+    digitalWrite(Debug_LED4, LOW);
+    digitalWrite(Debug_LED5, LOW);
+    digitalWrite(Debug_LED6, LOW);
+    delay(50);
+  }
+  
+  // 2. Send reset notification over CAN
+  uint8_t reset_data[2] = {0xAA, reason};
+  CAN_MSG_SEND(0x501, 2, reset_data);  // Use appropriate ID
+  
+  // 3. Safety shutdown - clean state
+  ignition_signal = 0;
+  ignition_signal_flag = 0;
+  ASMS_SIGNAL = 0;
+  status_ASSI = 0;
+  
+  // 4. Final delay to allow CAN messages to send
+  delay(100);
+  
+  // 5. Perform watchdog reset (safer than direct SCB_AIRCR)
+  wdt_software.reset();
+  
+  // 6. If watchdog fails, fall back to system reset
+  delay(100);
+  SCB_AIRCR = 0x05FA0004;
+}
+
+void checkForResetRequest() {
+  // Method 1: IGN button long press
+  if (digitalRead(IGN_PIN) == 0) {  // Corrected syntax
+    if (reset_button_press_time == 0) {
+      reset_button_press_time = millis();
+    } 
+    else if (!reset_in_progress && (millis() - reset_button_press_time > RESET_TIMEOUT)) {
+      reset_in_progress = true;
+      performSystemReset(1);  // Reason 1: Manual button reset
+    }
+  } 
+  else {
+    reset_button_press_time = 0;
+    reset_in_progress = false;
+  }
+  
+  // Method 2: CAN command reset
+  if (Received_CAN_MSG.id == 0x505) {  // Choose appropriate ID
+    if (Received_CAN_MSG.buf[0] == 0x55 && Received_CAN_MSG.buf[1] == 0xAA) {
+      performSystemReset(2);  // Reason 2: Remote CAN reset
     }
   }
 }
@@ -424,4 +522,8 @@ void sendJson()
 
   // Send the JSON string over Serial2
   Serial2.println(json); // Send the JSON message
+}
+
+void send_can_msg(){
+  
 }
