@@ -4,7 +4,7 @@
 volatile int ASSI_status = 1;
 unsigned long ASSI_YELLOW_time = 0, ASSI_BLUE_time = 0;
 
-#define NORMAL_LEDS 0
+#define NORMAL_LEDS 1
 
 #if not NORMAL_LEDS
 #include <Adafruit_NeoPixel.h>

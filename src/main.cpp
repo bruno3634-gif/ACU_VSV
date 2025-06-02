@@ -90,7 +90,7 @@ void setup()
   
   CAN_init();
   ASSI(status_ASSI);
-  /*
+  
   while (digitalRead(IGN_PIN) == 1)
   {
     wdt_software.feed();
@@ -98,7 +98,7 @@ void setup()
     delay(100);
 
   }
-*/
+
   wdt_software.begin(config);  
   wdt_software.feed();                               
   // wait for res
