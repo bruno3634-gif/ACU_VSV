@@ -38,8 +38,8 @@ int ASSI(int ASSI_status)
 #if NORMAL_LEDS
     // digitalWrite(YELLOW_LEDS, HIGH);
     // digitalWrite(BLUE_LEDS, LOW);
-    digitalWrite(YELLOW_LEDS, LOW);
-    digitalWrite(BLUE_LEDS, HIGH);
+    digitalWrite(YELLOW_LEDS, HIGH);
+    digitalWrite(BLUE_LEDS, LOW);
 #else
     for (int i = 0; i < NUMPIXELS; i++)
     { // For each pixel...
@@ -77,7 +77,7 @@ int ASSI(int ASSI_status)
   case 4:
 #if NORMAL_LEDS
     // digitalWrite(YELLOW_LEDS, LOW);
-    digitalWrite(YELLOW_LEDS, HIGH);
+    digitalWrite(YELLOW_LEDS, LOW);
     if (millis() - ASSI_BLUE_time >= 500)
     {
       ASSI_BLUE_time = millis();
@@ -105,8 +105,8 @@ int ASSI(int ASSI_status)
 #if NORMAL_LEDS
     // digitalWrite(YELLOW_LEDS, LOW);
     // digitalWrite(BLUE_LEDS, HIGH);
-    digitalWrite(YELLOW_LEDS, HIGH);
-    digitalWrite(BLUE_LEDS, LOW);
+    digitalWrite(YELLOW_LEDS, LOW);
+    digitalWrite(BLUE_LEDS, HIGH);
 #else
     for (int i = 0; i < NUMPIXELS; i++)
     { // For each pixel...
@@ -120,8 +120,8 @@ int ASSI(int ASSI_status)
 #if NORMAL_LEDS
     // digitalWrite(YELLOW_LEDS, LOW);
     // digitalWrite(BLUE_LEDS, LOW);
-    digitalWrite(YELLOW_LEDS, HIGH);
-    digitalWrite(BLUE_LEDS, HIGH);
+    digitalWrite(YELLOW_LEDS, LOW);
+    digitalWrite(BLUE_LEDS, LOW);
 // Serial.println("ASSI Status not defined");
 #else
     for (int i = 0; i < NUMPIXELS; i++)

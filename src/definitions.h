@@ -76,8 +76,8 @@
 
 //#define YELLOW_LEDS 24
 //#define BLUE_LEDS 23
-#define YELLOW_LEDS 24
-#define BLUE_LEDS 23
+#define BLUE_LEDS 24
+#define YELLOW_LEDS 23
 
 // Solenoides
 
@@ -98,7 +98,7 @@
 
 #endif
 
-#define TANK_PRESSURE_THRESHOLD 100
+#define TANK_PRESSURE_THRESHOLD 3.5
 
 #define TANKS_INDEX_SIZE 6
 

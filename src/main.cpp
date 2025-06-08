@@ -4,6 +4,7 @@
 #include "CAN.h"
 #include "Watchdog_t4.h"
 #include "autonomous_temporary.h"
+#include "InternalTemperature.h"
 
 #define Pressure_readings_enable 1
 #define SERIAL_DEBUG 0
@@ -22,6 +23,9 @@ void Pressure_readings();
 void median_pressures();
 #endif
 
+
+float voltage_b = 0;
+uint8_t ignition_signal_p = 0;
 unsigned long watchdog_time = 0;
 volatile uint8_t ignition_signal = 0, ignition_signal_flag = 0;
 volatile int start_signal = 0;
@@ -58,7 +62,7 @@ bool reset_in_progress = false;
 
 void wdtCallback()
 {
-  digitalWrite(Debug_LED6, HIGH);
+  //digitalWrite(Debug_LED6, HIGH);
 }
 
 void send_can_msg();
@@ -74,12 +78,12 @@ void setup()
   uint8_t resetReason = 0;
   if (CrashReport) {
     resetReason = 0x10;  // Crash-induced reset
-    Serial.println("System recovered from crash!");
+    Serial2.println("System recovered from crash!");
   } else {
     resetReason = 0x20;  // Normal power-on reset
-    Serial.println("System boot normally!");
+    Serial2.println("System boot normally!");
   }
-  Serial.println("System boot - Reset reason: " + String(resetReason));
+  Serial2.println("System boot - Reset reason: " + String(resetReason));
   
 
   config.trigger = 1;            /* in seconds, 0->128 Warning trigger before timeout */
@@ -131,8 +135,9 @@ void setup()
     if (HeartBit + 500 <= millis())
     {
       digitalWrite(HB_LED, !digitalRead(HB_LED));
+      //digitalWrite(SOLENOID1,!digitalRead(SOLENOID1));
       HeartBit = millis();
-      digitalWrite(Debug_LED2, !digitalRead(Debug_LED2));
+     // digitalWrite(Debug_LED2, !digitalRead(Debug_LED2));
     }
     ign_en = 0;
 #if SERIAL_DEBUG
@@ -147,6 +152,8 @@ void setup()
 
   } while (Received_CAN_MSG.id != RES_ID && digitalRead(ASMS) == 0);  // switch to || fo vsv
 ign_en = 1;
+  //uint8_t sg[] = {0x00};
+  //CAN_MSG_SEND(0x00,1, sg); // Send a dummy message to clear the bus
   wdt_software.feed();
   reset_debug_leds();
   wdt_software.feed();
@@ -171,7 +178,7 @@ ign_en = 1;
     if (mission_update + 100 <= millis())
     {
       mission_update = millis();
-      digitalWrite(Debug_LED5, !digitalRead(Debug_LED5));
+      //digitalWrite(Debug_LED5, !digitalRead(Debug_LED5));
     }
 
     // Received_CAN_MSG = CAN_MSG_RECEIVE();
@@ -184,18 +191,18 @@ ign_en = 1;
     if (HeartBit + 500 <= millis())
     {
       digitalWrite(HB_LED, !digitalRead(HB_LED));
-      digitalWrite(Debug_LED3, !digitalRead(Debug_LED3));
+      //digitalWrite(Debug_LED3, !digitalRead(Debug_LED3));
       HeartBit = millis();
     }
     if (digitalRead(IGN_PIN) == 1)
     {
       ignition_signal = 1;
-      digitalWrite(Debug_LED2, HIGH);
+      //digitalWrite(Debug_LED2, HIGH);
     }
     else
     {
       ignition_signal = 0;
-      digitalWrite(Debug_LED2, LOW);
+      //digitalWrite(Debug_LED2, LOW);
     }
   }
 
@@ -203,7 +210,7 @@ ign_en = 1;
   if (HeartBit + 2000 <= millis())
   {
     digitalWrite(HB_LED, !digitalRead(HB_LED));
-    digitalWrite(Debug_LED3, !digitalRead(Debug_LED3));
+    //digitalWrite(Debug_LED3, !digitalRead(Debug_LED3));
     HeartBit = millis();
   }
   uint8_t ignition_data[1] = {2};
@@ -213,7 +220,7 @@ ign_en = 1;
   reset_debug_leds();
 
   // detachInterrupt(digitalPinToInterrupt(IGN));
-  digitalWrite(Debug_LED4, HIGH);
+  //digitalWrite(Debug_LED4, HIGH);
 }
 
 void loop()
@@ -227,8 +234,8 @@ void loop()
   {
     //Serial2.println("Status: " + String(status_ASSI));
     digitalWrite(HB_LED, !digitalRead(HB_LED));
-    digitalWrite(Debug_LED4, !digitalRead(Debug_LED4));
-    digitalWrite(Debug_LED6, !digitalRead(Debug_LED4));
+    //digitalWrite(Debug_LED4, !digitalRead(Debug_LED4));
+    //digitalWrite(Debug_LED6, !digitalRead(Debug_LED4));
     HeartBit = millis();
     uint8_t dummy_data[1] = {1};
     CAN_MSG_SEND(0x99, 1, dummy_data);
@@ -313,6 +320,9 @@ void peripheral_init()
   pinMode(ASMS, INPUT);
   pinMode(IGN_PIN, INPUT);
 
+  pinMode(SOLENOID1, OUTPUT);
+  pinMode(SOLENOID2, OUTPUT);
+
   Serial2.begin(115200);
   Serial.begin(115200);
 
@@ -388,36 +398,54 @@ void reset_debug_leds()
 
 #if Pressure_readings_enable
 
-void Pressure_readings()
-{
-  EBS_TANK_PRESSURE_A_values[pointer] = analogRead(EBS_TANK_PRESSURE_A) * 3.3 / 1023 * 2.179;
-  EBS_TANK_PRESSURE_B_values[pointer] = analogRead(EBS_TANK_PRESSURE_B) * 3.3 / 1023 * 2.179;
+void Pressure_readings() {
+  EBS_TANK_PRESSURE_A_values[pointer] = analogRead(EBS_TANK_PRESSURE_A);
+  EBS_TANK_PRESSURE_B_values[pointer] = analogRead(EBS_TANK_PRESSURE_B);
   pointer++;
-  if (pointer >= PRESSURE_READINGS)
-  {
+  if (pointer >= PRESSURE_READINGS) {
     pointer = 0;
   }
 }
 #endif
 
-void median_pressures()
-{
-
+void median_pressures() {
 #if Pressure_readings_enable
-  if (pressure_time + 100 <= millis())
-  {
+  if (pressure_time + 300 <= millis()) { 
     pressure_time = millis();
-    EBS_TANK_PRESSURE_A_value = 0;
-    EBS_TANK_PRESSURE_B_value = 0;
-    for (int i = 0; i < PRESSURE_READINGS; i++)
-    {
-      EBS_TANK_PRESSURE_A_value += EBS_TANK_PRESSURE_A_values[i];
-      EBS_TANK_PRESSURE_B_value += EBS_TANK_PRESSURE_B_values[i];
+    float chipTemp = InternalTemperature.readTemperatureC();
+    Serial2.println("Chip temperature: " + String(chipTemp) + " C");
+    // Calculate averages from the array
+    float sum = 0;
+    for (int i = 0; i < PRESSURE_READINGS; i++) {
+      sum += EBS_TANK_PRESSURE_B_values[i];
     }
-    EBS_TANK_PRESSURE_A_value = EBS_TANK_PRESSURE_A_value / PRESSURE_READINGS;
-    EBS_TANK_PRESSURE_B_value = EBS_TANK_PRESSURE_B_value / PRESSURE_READINGS;
-    EBS_TANK_PRESSURE_A_value = 0.280851064 * EBS_TANK_PRESSURE_A_value - 0.351063830;
-    EBS_TANK_PRESSURE_B_value = 0.280851064 * EBS_TANK_PRESSURE_B_value + 0.351063830;
+    EBS_TANK_PRESSURE_B_value = sum / PRESSURE_READINGS;
+    
+    // Store raw voltage for debugging (convert ADC to voltage)
+    float rawVoltage = EBS_TANK_PRESSURE_B_value * 3.3 / 1023; // Read raw voltage from the analog pin
+    
+    // Use corrected divider value (0.85 instead of 0.66) prev val 0.476
+    float actualVoltage = rawVoltage / 0.66;
+    
+    // Apply formula ONCE with corrected divider
+    float pressure = (actualVoltage - 0.5) / 0.4;
+    
+    Serial2.println("Raw ADC: " + String(EBS_TANK_PRESSURE_B_value));
+    Serial2.println("Raw voltage: " + String(rawVoltage));
+    Serial2.println("Actual voltage: " + String(actualVoltage));
+    Serial2.println("Pressure: " + String(pressure) + " bar");
+
+    if(pressure < TANK_PRESSURE_THRESHOLD){
+      digitalWrite(SOLENOID1,HIGH);
+      digitalWrite(SOLENOID2,HIGH);
+      ignition_signal_p = 0; // Turn off ignition if pressure is below threshold
+    }
+    else{
+      digitalWrite(SOLENOID1,LOW);
+      digitalWrite(SOLENOID2,LOW);
+      ignition_signal_p = 1; // Turn on ignition if pressure is above threshold
+    }
+    digitalWrite(Debug_LED5, !ignition_signal_p); // Turn off debug LED after reading pressure
   }
 #endif
 }
@@ -465,7 +493,7 @@ void checkForResetRequest() {
   }
   
   // Method 2: CAN command reset
-  if (Received_CAN_MSG.id == IGN_FROM_VCU) {  // Choose appropriate ID
+  if (Received_CAN_MSG.id == IGN_FROM_VCU && status_ASSI != 4){  // Choose appropriate ID
     if (Received_CAN_MSG.buf[0] == 0x00) {
       performSystemReset(2);  // Reason 2: Remote CAN reset
     }
