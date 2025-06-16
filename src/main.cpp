@@ -60,6 +60,8 @@ WDT_T4<WDT1> wdt_software;
 unsigned long reset_button_press_time = 0;
 bool reset_in_progress = false;
 
+uint8_t emergency_flag = 0; // Flag to indicate emergency state
+
 void wdtCallback()
 {
   //digitalWrite(Debug_LED6, HIGH);
@@ -225,6 +227,7 @@ ign_en = 1;
 
 void loop()
 {
+
   checkForResetRequest();
   wdt_software.feed();
 #if Pressure_readings_enable
@@ -232,10 +235,9 @@ void loop()
 #endif
   if (HeartBit + 500 <= millis())
   {
-    //Serial2.println("Status: " + String(status_ASSI));
+
     digitalWrite(HB_LED, !digitalRead(HB_LED));
-    //digitalWrite(Debug_LED4, !digitalRead(Debug_LED4));
-    //digitalWrite(Debug_LED6, !digitalRead(Debug_LED4));
+
     HeartBit = millis();
     uint8_t dummy_data[1] = {1};
     CAN_MSG_SEND(0x99, 1, dummy_data);
@@ -250,9 +252,17 @@ void loop()
 
   if (Received_CAN_MSG.id == JETSON_AMS)
   {
-    //Serial2.println(Received_CAN_MSG.id);
-    //Serial2.println(Received_CAN_MSG.buf[0]);
+
     status_ASSI = Received_CAN_MSG.buf[0];
+  }
+  else{
+    if(Received_CAN_MSG.id == RES_ID){
+      if(Received_CAN_MSG.buf[0] == AUTONOMOUS_TEMPORARY_RES_SIGNAL_EMERGENCY_CHOICE)
+      status_ASSI =  4; // Emergency
+      emergency_flag = 0; // Reset emergency flag
+      digitalWrite(Debug_LED4, HIGH); // Turn off emergency LED
+      
+    }
   }
 
   if (mission_ign_update + 100 <= millis())
@@ -264,6 +274,8 @@ void loop()
     if (status_ASSI == 4)
     {
       mission_ign_update = millis();
+      emergency_flag = 1; // Set emergency flag
+      digitalWrite(Debug_LED4, HIGH); // Turn on emergency LED
     }
   }
 
@@ -439,6 +451,7 @@ void median_pressures() {
       digitalWrite(SOLENOID1,HIGH);
       digitalWrite(SOLENOID2,HIGH);
       ignition_signal_p = 0; // Turn off ignition if pressure is below threshold
+      emergency_flag = 1; // Set emergency flag
     }
     else{
       digitalWrite(SOLENOID1,LOW);
@@ -446,6 +459,7 @@ void median_pressures() {
       ignition_signal_p = 1; // Turn on ignition if pressure is above threshold
     }
     digitalWrite(Debug_LED5, !ignition_signal_p); // Turn off debug LED after reading pressure
+    EBS_TANK_PRESSURE_B_value = pressure; // Store the pressure value for further use
   }
 #endif
 }
@@ -484,6 +498,11 @@ void checkForResetRequest() {
     } 
     else if (!reset_in_progress && (millis() - reset_button_press_time > RESET_TIMEOUT)) {
       reset_in_progress = true;
+      while (EBS_TANK_PRESSURE_B_value < 0.5){
+        wdt_software.feed();  // Feed watchdog to prevent reset during pressure check
+        Serial2.println("wainting forpressure under 0.5 bar");
+      }
+      
       performSystemReset(1);  // Reason 1: Manual button reset
     }
   } 
@@ -499,6 +518,7 @@ void checkForResetRequest() {
     }
   }
 }
+
 
 void sendJson()
 {
@@ -539,17 +559,17 @@ void send_can_msg() {
   }
   
   // Prepare message data
-  uint8_t ignition_data[2] = {0,ASMS_SIGNAL};
+  uint8_t ignition_data[3] = {0,ASMS_SIGNAL,emergency_flag};
   
   // Apply the same logic as before
-  if (!ignition_signal || ign_en == 0) {
+  if (!ignition_signal || ign_en == 0 || emergency_flag == 1) {
     ignition_data[0] = 0;
   } else {
     ignition_data[0] = ignition_signal;
   }
   
   // Send ignition message
-  CAN_MSG_SEND(VCU_IGN, 2, ignition_data);
+  CAN_MSG_SEND(VCU_IGN, 3, ignition_data);
   
   // Also periodically send mission status
   uint8_t mission_data[1] = {mission_flag};
