@@ -500,6 +500,7 @@ void checkForResetRequest() {
       reset_in_progress = true;
       while (EBS_TANK_PRESSURE_B_value < 0.5){
         wdt_software.feed();  // Feed watchdog to prevent reset during pressure check
+        median_pressures();  // Read pressure values
         Serial2.println("wainting forpressure under 0.5 bar");
       }
       
