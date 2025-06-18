@@ -5,6 +5,7 @@
 #include "Watchdog_t4.h"
 #include "autonomous_temporary.h"
 #include "InternalTemperature.h"
+#include "sequence.h"
 
 #define Pressure_readings_enable 1
 #define SERIAL_DEBUG 0
@@ -35,6 +36,9 @@ unsigned long mission_debounce = 0;
 unsigned long mission_update = 0;
 unsigned long HeartBit = 0;
 volatile uint8_t ASMS_SIGNAL = 0;
+volatile uint8_t status_ready = 0;
+
+
 
 #if Pressure_readings_enable
 float EBS_TANK_PRESSURE_A_value = 0, EBS_TANK_PRESSURE_B_value = 0;
@@ -76,6 +80,7 @@ void setup()
 {
   ignition_signal = 0;
   peripheral_init();
+  status_ready = 1;
   // At the beginning of setup
   uint8_t resetReason = 0;
   if (CrashReport) {
@@ -96,7 +101,6 @@ void setup()
   
   CAN_init();
   ASSI(status_ASSI);
-  
   while (digitalRead(IGN_PIN) == 1)
   {
     wdt_software.feed();
@@ -152,7 +156,7 @@ void setup()
     }
 #endif
 
-  } while (Received_CAN_MSG.id != RES_ID && digitalRead(ASMS) == 0);  // switch to || fo vsv
+  } while (Received_CAN_MSG.id != RES_ID || digitalRead(ASMS) == 0);  // switch to || fo vsv
 ign_en = 1;
   //uint8_t sg[] = {0x00};
   //CAN_MSG_SEND(0x00,1, sg); // Send a dummy message to clear the bus
@@ -215,19 +219,19 @@ ign_en = 1;
     //digitalWrite(Debug_LED3, !digitalRead(Debug_LED3));
     HeartBit = millis();
   }
-  uint8_t ignition_data[1] = {2};
-  CAN_MSG_SEND(IGN_TO_ACU, 1, ignition_data);
-
+  status_ready = 2;
+  
   wdt_software.feed();
   reset_debug_leds();
-
+  digitalWrite(SOLENOID1,LOW);
+  digitalWrite(SOLENOID2,LOW);
   // detachInterrupt(digitalPinToInterrupt(IGN));
   //digitalWrite(Debug_LED4, HIGH);
 }
 
 void loop()
 {
-
+  status_ready = status_ASSI;
   checkForResetRequest();
   wdt_software.feed();
 #if Pressure_readings_enable
@@ -334,6 +338,9 @@ void peripheral_init()
 
   pinMode(SOLENOID1, OUTPUT);
   pinMode(SOLENOID2, OUTPUT);
+
+  digitalWrite(SOLENOID1, 0);
+  digitalWrite(SOLENOID2, 0);
 
   Serial2.begin(115200);
   Serial.begin(115200);
@@ -451,7 +458,7 @@ void median_pressures() {
       digitalWrite(SOLENOID1,HIGH);
       digitalWrite(SOLENOID2,HIGH);
       ignition_signal_p = 0; // Turn off ignition if pressure is below threshold
-      emergency_flag = 1; // Set emergency flag
+     // emergency_flag = 1; // Set emergency flag
     }
     else{
       digitalWrite(SOLENOID1,LOW);
@@ -476,6 +483,7 @@ void performSystemReset(uint8_t reason) {
   // 3. Safety shutdown - clean state0
   ignition_signal = 0;
   ignition_signal_flag = 0;
+  status_ready = 0;
   ASMS_SIGNAL = 0;
   status_ASSI = 0;
   
@@ -575,4 +583,8 @@ void send_can_msg() {
   // Also periodically send mission status
   uint8_t mission_data[1] = {mission_flag};
   CAN_MSG_SEND(ACU_MS, 1, mission_data);
+
+  uint8_t status_data[1] = {status_ready};
+  CAN_MSG_SEND(IGN_TO_ACU, 1, status_data);
+
 }
