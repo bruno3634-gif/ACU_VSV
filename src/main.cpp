@@ -169,7 +169,13 @@ ign_en = 1;
   // attachInterrupt(digitalPinToInterrupt(IGN), IGN_INT, CHANGE);
 
   //  Waiting for IGNITION SIGNAL
-  while (ignition_signal_flag == 0 || ignition_signal == 0)
+
+  do{
+    wdt_software.feed();
+    median_pressures();
+  }while(EBS_TANK_PRESSURE_B_value <= TANK_PRESSURE_THRESHOLD);
+
+  while (ignition_signal_flag == 0 || ignition_signal == 0 )
   {
     ASSI(status_ASSI);
     wdt_software.feed();
@@ -220,6 +226,9 @@ ign_en = 1;
     HeartBit = millis();
   }
   status_ready = 2;
+  digitalWrite(Debug_LED2, HIGH); // Turn on debug LED to indicate ignition is ready
+  uint8_t status_data[1] = {status_ready};
+  CAN_MSG_SEND(IGN_TO_ACU, 1, status_data);
   
   wdt_software.feed();
   reset_debug_leds();
@@ -231,7 +240,11 @@ ign_en = 1;
 
 void loop()
 {
-  status_ready = status_ASSI;
+  if(status_ASSI > 2){
+      status_ready = status_ASSI;
+      
+  }
+
   checkForResetRequest();
   wdt_software.feed();
 #if Pressure_readings_enable
@@ -239,7 +252,7 @@ void loop()
 #endif
   if (HeartBit + 500 <= millis())
   {
-
+    Serial2.println("\n\nstatus_ready: " + String(status_ready));
     digitalWrite(HB_LED, !digitalRead(HB_LED));
 
     HeartBit = millis();
@@ -483,7 +496,7 @@ void performSystemReset(uint8_t reason) {
   // 3. Safety shutdown - clean state0
   ignition_signal = 0;
   ignition_signal_flag = 0;
-  status_ready = 0;
+  //status_ready = 0;
   ASMS_SIGNAL = 0;
   status_ASSI = 0;
   
@@ -555,6 +568,7 @@ void send_can_msg() {
   
   // Add new reading to the buffer
   ignition_readings[reading_index] = digitalRead(IGN_PIN);
+  Serial2.println("Ignition reading: " + String(ignition_readings[reading_index]));
   reading_index = (reading_index + 1) % 3;
   
   // Only change state if all readings agree
