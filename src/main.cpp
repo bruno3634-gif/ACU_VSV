@@ -134,7 +134,14 @@ void setup()
       Serial2.println("WDT");
     }*/
     Received_CAN_MSG = CAN_MSG_RECEIVE();
-
+    if(Received_CAN_MSG.id == RES_ID){
+      if(Received_CAN_MSG.buf[0] == AUTONOMOUS_TEMPORARY_RES_SIGNAL_EMERGENCY_CHOICE)
+      {
+        status_ASSI = 4; // Emergency
+        emergency_flag = 1; // Set emergency flag
+        digitalWrite(Debug_LED4, HIGH); // Turn on emergency LED
+      }
+    }
 
     mission = 0;
     Mission_Select(mission);
@@ -156,7 +163,7 @@ void setup()
     }
 #endif
 
-  } while (Received_CAN_MSG.id != RES_ID || digitalRead(ASMS) == 0);  // switch to || fo vsv
+  } while ((Received_CAN_MSG.id != RES_ID || digitalRead(ASMS) == 0));  // switch to || fo vsv
 ign_en = 1;
   //uint8_t sg[] = {0x00};
   //CAN_MSG_SEND(0x00,1, sg); // Send a dummy message to clear the bus
@@ -175,7 +182,7 @@ ign_en = 1;
     median_pressures();
   }while(EBS_TANK_PRESSURE_B_value <= TANK_PRESSURE_THRESHOLD);
 
-  while (ignition_signal_flag == 0 || ignition_signal == 0 )
+  while ((ignition_signal_flag == 0 || ignition_signal == 0) && status_ASSI == 4)
   {
     ASSI(status_ASSI);
     wdt_software.feed();
@@ -225,7 +232,10 @@ ign_en = 1;
     //digitalWrite(Debug_LED3, !digitalRead(Debug_LED3));
     HeartBit = millis();
   }
-  status_ready = 2;
+  if(status_ASSI != 4){
+        status_ready = 2;
+  }
+
   digitalWrite(Debug_LED2, HIGH); // Turn on debug LED to indicate ignition is ready
   uint8_t status_data[1] = {status_ready};
   CAN_MSG_SEND(IGN_TO_ACU, 1, status_data);
