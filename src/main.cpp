@@ -5,7 +5,16 @@
 #include "Watchdog_t4.h"
 #include "autonomous_temporary.h"
 #include "InternalTemperature.h"
-#include "sequence.h"
+#include <EEPROM.h>
+
+// Global state machine
+StateMachine sm = {STATE_INIT, STATE_INIT, 0, 0, false, EVENT_NONE};
+
+// Your existing global variables
+WDT_T4<WDT1> wdt_software;
+WDT_T4<WDT1> wdt_seq;
+uint8_t emergency_flag = 0;
+volatile uint8_t ignition_signal = 0;
 
 #define Pressure_readings_enable 1
 #define SERIAL_DEBUG 0
@@ -28,15 +37,35 @@ void median_pressures();
 float voltage_b = 0;
 uint8_t ignition_signal_p = 0;
 unsigned long watchdog_time = 0;
-volatile uint8_t ignition_signal = 0, ignition_signal_flag = 0;
+volatile uint8_t ignition_signal_flag = 0;
 volatile int start_signal = 0;
 volatile int status_ASSI = 0;
 volatile uint8_t mission = 0, mission_flag = 0;
-unsigned long mission_debounce = 0;
 unsigned long mission_update = 0;
 unsigned long HeartBit = 0;
 volatile uint8_t ASMS_SIGNAL = 0;
 volatile uint8_t status_ready = 0;
+
+
+
+
+
+// Function prototypes
+void executeStateInit();
+void executeStateWaitingActivation();
+void executeStatePressureCheck();
+void executeStateOperational();
+void executeStateEmergencyEntry();
+void executeStateEmergencyActive();
+void executeStateDepressurizing();
+void executeStateRecoveryReady();
+void executeStateFault();
+void executeStateMaintenance();
+void updatePressureReadings();
+void updateIgnitionControl();
+bool checkCANHealth();
+
+
 
 
 
@@ -59,12 +88,9 @@ unsigned long wdt_time_update = 0;
 unsigned long mission_ign_update;
 
 CAN_message_t Received_CAN_MSG;
-WDT_T4<WDT1> wdt_software;
 
 unsigned long reset_button_press_time = 0;
 bool reset_in_progress = false;
-
-uint8_t emergency_flag = 0; // Flag to indicate emergency state
 
 void wdtCallback()
 {
@@ -76,343 +102,458 @@ void send_can_msg();
 WDT_timings_t config;
 volatile int ign_en = 0; 
 
-void setup()
-{
-  ignition_signal = 0;
-  peripheral_init();
-  status_ready = 1;
-  // At the beginning of setup
-  uint8_t resetReason = 0;
-  if (CrashReport) {
-    resetReason = 0x10;  // Crash-induced reset
-    Serial2.println("System recovered from crash!");
-  } else {
-    resetReason = 0x20;  // Normal power-on reset
-    Serial2.println("System boot normally!");
-  }
-  Serial2.println("System boot - Reset reason: " + String(resetReason));
+void setup() {
+  Serial2.begin(115200);
+  Serial2.println("ACU_VSV State Machine Starting...");
   
-
-  config.trigger = 1;            /* in seconds, 0->128 Warning trigger before timeout */
-  config.timeout = 2;            /* in seconds, 0->128 Timeout to reset */
-  config.callback = wdtCallback; // Callback function to be called on timeout
-
-  
-  
-  CAN_init();
-  ASSI(status_ASSI);
-  while (digitalRead(IGN_PIN) == 1)
-  {
-    wdt_software.feed();
-    Serial2.println("Waiting for ignition signal");
-    delay(100);
-
-  }
-
-  wdt_software.begin(config);  
-  wdt_software.feed();                               
-  // wait for res
-  do
-  {
-    if(CrashReport)
-    {
-      Serial.print(CrashReport);
-    }
-    Serial.println("Waiting for RES");
-
-
-    ASSI(status_ASSI);
-    wdt_software.feed();
-#if Pressure_readings_enable
-    median_pressures();
-#endif
-/*if (wdt_hardware_time + 10 <= millis())
-    {
-      Serial2.println(millis()-wdt_hardware_time);
-      digitalWrite(WDT, !digitalRead(WDT));
-      wdt_hardware_time = millis();
-      Serial2.println("WDT");
-    }*/
-    Received_CAN_MSG = CAN_MSG_RECEIVE();
-
-
-    mission = 0;
-    Mission_Select(mission);
-    if (HeartBit + 500 <= millis())
-    {
-      digitalWrite(HB_LED, !digitalRead(HB_LED));
-      //digitalWrite(SOLENOID1,!digitalRead(SOLENOID1));
-      HeartBit = millis();
-     // digitalWrite(Debug_LED2, !digitalRead(Debug_LED2));
-    }
-    ign_en = 0;
-#if SERIAL_DEBUG
-    if (DEBUG_TIME + 100 <= millis())
-    {
-
-      sendJson();
-
-      DEBUG_TIME = millis();
-    }
-#endif
-
-  } while (Received_CAN_MSG.id != RES_ID || digitalRead(ASMS) == 0);  // switch to || fo vsv
-ign_en = 1;
-  //uint8_t sg[] = {0x00};
-  //CAN_MSG_SEND(0x00,1, sg); // Send a dummy message to clear the bus
-  wdt_software.feed();
-  reset_debug_leds();
-  wdt_software.feed();
-  ASMS_SIGNAL = 1;
-
-  attachInterrupt(digitalPinToInterrupt(MS_BUTTON1), MS_INT, FALLING);
-  // attachInterrupt(digitalPinToInterrupt(IGN), IGN_INT, CHANGE);
-
-  //  Waiting for IGNITION SIGNAL
-
-  do{
-    wdt_software.feed();
-    median_pressures();
-  }while(EBS_TANK_PRESSURE_B_value <= TANK_PRESSURE_THRESHOLD);
-
-  while (ignition_signal_flag == 0 || ignition_signal == 0 )
-  {
-    ASSI(status_ASSI);
-    wdt_software.feed();
-    Received_CAN_MSG = CAN_MSG_RECEIVE();
-    if (Received_CAN_MSG.id == IGN_FROM_VCU)
-    {
-      ignition_signal_flag = Received_CAN_MSG.buf[0];
-    }
-#if Pressure_readings_enable
-    median_pressures();
-#endif
-    if (mission_update + 100 <= millis())
-    {
-      mission_update = millis();
-      //digitalWrite(Debug_LED5, !digitalRead(Debug_LED5));
-    }
-
-    // Received_CAN_MSG = CAN_MSG_RECEIVE();
-    if (Received_CAN_MSG.id == JETSON_MS)
-    {
-      mission = Received_CAN_MSG.buf[0];
-      Mission_Select(mission);
-    }
-
-    if (HeartBit + 500 <= millis())
-    {
-      digitalWrite(HB_LED, !digitalRead(HB_LED));
-      //digitalWrite(Debug_LED3, !digitalRead(Debug_LED3));
-      HeartBit = millis();
-    }
-    if (digitalRead(IGN_PIN) == 1)
-    {
-      ignition_signal = 1;
-      //digitalWrite(Debug_LED2, HIGH);
-    }
-    else
-    {
-      ignition_signal = 0;
-      //digitalWrite(Debug_LED2, LOW);
-    }
-  }
-
-  detachInterrupt(digitalPinToInterrupt(MS_BUTTON1));
-  if (HeartBit + 2000 <= millis())
-  {
-    digitalWrite(HB_LED, !digitalRead(HB_LED));
-    //digitalWrite(Debug_LED3, !digitalRead(Debug_LED3));
-    HeartBit = millis();
-  }
-  status_ready = 2;
-  digitalWrite(Debug_LED2, HIGH); // Turn on debug LED to indicate ignition is ready
-  uint8_t status_data[1] = {status_ready};
-  CAN_MSG_SEND(IGN_TO_ACU, 1, status_data);
-  
-  wdt_software.feed();
-  reset_debug_leds();
-  digitalWrite(SOLENOID1,LOW);
-  digitalWrite(SOLENOID2,LOW);
-  // detachInterrupt(digitalPinToInterrupt(IGN));
-  //digitalWrite(Debug_LED4, HIGH);
+  initializeHardware();
+  changeState(STATE_INIT);
 }
 
-void loop()
-{
-  if(status_ASSI > 2){
-      status_ready = status_ASSI;
-      
-  }
+void loop() {
+  updateSystemInputs();
+  processSystemEvents();
+  executeCurrentState();
+  handleStateTransitions();
+  handleHeartbeat();
+  feedWatchdogs();
+  
+  delay(10);
+}
 
-  checkForResetRequest();
-  wdt_software.feed();
-#if Pressure_readings_enable
-  median_pressures();
-#endif
-  if (HeartBit + 500 <= millis())
-  {
-    Serial2.println("\n\nstatus_ready: " + String(status_ready));
-    digitalWrite(HB_LED, !digitalRead(HB_LED));
-
-    HeartBit = millis();
-    uint8_t dummy_data[1] = {1};
-    CAN_MSG_SEND(0x99, 1, dummy_data);
-  }
-  Received_CAN_MSG = CAN_MSG_RECEIVE();
-
-  if(canPrint_Millis + 100 <= millis())
-  {
-    Serial.println("ID:" + String(Received_CAN_MSG.id) + " Data: " + String(Received_CAN_MSG.buf[0]));
-    canPrint_Millis = millis();
-  }
-
-  if (Received_CAN_MSG.id == JETSON_AMS)
-  {
-
-    status_ASSI = Received_CAN_MSG.buf[0];
-  }
-  else{
-    if(Received_CAN_MSG.id == RES_ID){
-      if(Received_CAN_MSG.buf[0] == AUTONOMOUS_TEMPORARY_RES_SIGNAL_EMERGENCY_CHOICE)
-      status_ASSI =  4; // Emergency
-      emergency_flag = 0; // Reset emergency flag
-      digitalWrite(Debug_LED4, HIGH); // Turn off emergency LED
-      
-    }
-  }
-
-  if (mission_ign_update + 100 <= millis())
-  {
-    Mission_Select(mission);
-
-    ASSI(status_ASSI);
+void changeState(SystemState newState) {
+  if (sm.currentState != newState) {
+    sm.previousState = sm.currentState;
+    sm.currentState = newState;
+    sm.stateEntryTime = millis();
+    sm.stateChanged = true;
     
-    if (status_ASSI == 4)
-    {
-      mission_ign_update = millis();
-      emergency_flag = 1; // Set emergency flag
-      digitalWrite(Debug_LED4, HIGH); // Turn on emergency LED
-    }
+    Serial2.println("STATE CHANGE: " + getStateName(sm.previousState) + 
+                    " -> " + getStateName(sm.currentState));
+    
+    onStateEntry(newState);
   }
-
-#if SERIAL_DEBUG
-  if (DEBUG_TIME + 100 <= millis())
-  {
-    void sendJson();
-
-    DEBUG_TIME = millis();
-  }
-#endif
 }
 
-void peripheral_init()
-{
-  pinMode(YELLOW_LEDS, OUTPUT);
-  pinMode(BLUE_LEDS, OUTPUT);
+void handleHeartbeat() {
+  if (millis() - sm.lastHeartbeat >= 1000) {
+    sm.lastHeartbeat = millis();
+    
+    Serial2.println("HEARTBEAT - State: " + getStateName(sm.currentState) + 
+                    " | Uptime: " + String(millis()/1000) + "s" +
+                    " | Pressure: " + String(EBS_TANK_PRESSURE_B_value) + " bar" +
+                    " | Emergency: " + String(emergency_flag ? "ACTIVE" : "CLEAR"));
+    
+    digitalWrite(HB_LED, !digitalRead(HB_LED));
+  }
+}
 
-  pinMode(MS_BUTTON1, INPUT_PULLUP);
+String getStateName(SystemState state) {
+  switch (state) {
+    case STATE_INIT: return "INIT";
+    case STATE_WAITING_ACTIVATION: return "WAITING_ACTIVATION";
+    case STATE_PRESSURE_CHECK: return "PRESSURE_CHECK";
+    case STATE_OPERATIONAL: return "OPERATIONAL";
+    case STATE_EMERGENCY_ENTRY: return "EMERGENCY_ENTRY";
+    case STATE_EMERGENCY_ACTIVE: return "EMERGENCY_ACTIVE";
+    case STATE_DEPRESSURIZING: return "DEPRESSURIZING";
+    case STATE_RECOVERY_READY: return "RECOVERY_READY";
+    case STATE_FAULT: return "FAULT";
+    case STATE_MAINTENANCE: return "MAINTENANCE";
+    default: return "UNKNOWN";
+  }
+}
 
-  pinMode(MS_LED1, OUTPUT);
-  pinMode(MS_LED2, OUTPUT);
-  pinMode(MS_LED3, OUTPUT);
-  pinMode(MS_LED4, OUTPUT);
-  pinMode(MS_LED5, OUTPUT);
-  pinMode(MS_LED6, OUTPUT);
-  pinMode(MS_LED7, OUTPUT);
-  digitalWrite(MS_LED1, 1);
-  digitalWrite(MS_LED2, 1);
-  digitalWrite(MS_LED3, 1);
-  digitalWrite(MS_LED4, 1);
-  digitalWrite(MS_LED5, 1);
-  digitalWrite(MS_LED6, 1);
-  digitalWrite(MS_LED7, 1);
-  pinMode(AS_SW, INPUT);
+void onStateEntry(SystemState state) {
+  reset_debug_leds();
+  
+  switch (state) {
+    case STATE_INIT:
+      Serial2.println("ENTERING: System Initialization");
+      break;
+    case STATE_WAITING_ACTIVATION:
+      Serial2.println("ENTERING: Waiting for Activation");
+      break;
+    case STATE_PRESSURE_CHECK:
+      Serial2.println("ENTERING: Pressure Validation");
+      break;
+    case STATE_OPERATIONAL:
+      Serial2.println("ENTERING: Normal Operation");
+      break;
+    case STATE_EMERGENCY_ENTRY:
+      Serial2.println("ENTERING: Emergency Entry");
+      break;
+    case STATE_EMERGENCY_ACTIVE:
+      Serial2.println("ENTERING: Emergency Active");
+      break;
+    case STATE_DEPRESSURIZING:
+      Serial2.println("ENTERING: Depressurizing");
+      break;
+    case STATE_RECOVERY_READY:
+      Serial2.println("ENTERING: Recovery Ready");
+      break;
+    case STATE_FAULT:
+      Serial2.println("ENTERING: System Fault");
+      break;
+    case STATE_MAINTENANCE:
+      Serial2.println("ENTERING: Maintenance Mode");
+      break;
+  }
+}
 
+void executeCurrentState() {
+  switch (sm.currentState) {
+    case STATE_INIT:
+      executeStateInit();
+      break;
+    case STATE_WAITING_ACTIVATION:
+      executeStateWaitingActivation();
+      break;
+    case STATE_PRESSURE_CHECK:
+      executeStatePressureCheck();
+      break;
+    case STATE_OPERATIONAL:
+      executeStateOperational();
+      break;
+    case STATE_EMERGENCY_ENTRY:
+      executeStateEmergencyEntry();
+      break;
+    case STATE_EMERGENCY_ACTIVE:
+      executeStateEmergencyActive();
+      break;
+    case STATE_DEPRESSURIZING:
+      executeStateDepressurizing();
+      break;
+    case STATE_RECOVERY_READY:
+      executeStateRecoveryReady();
+      break;
+    case STATE_FAULT:
+      executeStateFault();
+      break;
+    case STATE_MAINTENANCE:
+      executeStateMaintenance();
+      break;
+  }
+}
+
+void executeStateInit() {
+  reset_debug_leds();
+  digitalWrite(Debug_LED2, HIGH);
+  
+  ignition_signal = 0;
+  digitalWrite(SOLENOID1, LOW);
+  digitalWrite(SOLENOID2, LOW);
+  emergency_flag = 0;
+  
+  if (millis() - sm.stateEntryTime > 2000) {
+    sm.pendingEvent = EVENT_INIT_COMPLETE;
+  }
+}
+
+void executeStateWaitingActivation() {
+  digitalWrite(Debug_LED3, HIGH);
+  
+  ignition_signal = 0;
+  digitalWrite(SOLENOID1, LOW);
+  digitalWrite(SOLENOID2, LOW);
+  
+  updatePressureReadings();
+  
+  if (checkCANHealth() && digitalRead(ASMS)) {
+    sm.pendingEvent = EVENT_CAN_READY;
+  }
+}
+
+void executeStatePressureCheck() {
+  digitalWrite(Debug_LED4, HIGH);
+  updatePressureReadings();
+  
+  if (EBS_TANK_PRESSURE_B_value >= TANK_PRESSURE_THRESHOLD) {
+    sm.pendingEvent = EVENT_PRESSURE_OK;
+  } else {
+    sm.pendingEvent = EVENT_PRESSURE_LOW;
+  }
+}
+
+void executeStateOperational() {
+  digitalWrite(Debug_LED5, HIGH);
+  
+  updatePressureReadings();
+  updateIgnitionControl();
+  
+  if (EBS_TANK_PRESSURE_B_value < TANK_PRESSURE_THRESHOLD) {
+    sm.pendingEvent = EVENT_EMERGENCY_TRIGGER;
+  }
+  
+  if (!digitalRead(ASMS)) {
+    sm.pendingEvent = EVENT_ASMS_INACTIVE;
+  }
+  
+  static unsigned long lastJson = 0;
+  if (millis() - lastJson >= 1000) {
+    sendJson();
+    lastJson = millis();
+  }
+}
+
+void executeStateEmergencyEntry() {
+  digitalWrite(Debug_LED6, HIGH);
+  digitalWrite(YELLOW_LEDS, HIGH);
+  
+  // Log emergency entry details once
+  static bool entryLogged = false;
+  if (!entryLogged) {
+    Serial2.println("=== EMERGENCY ENTRY ACTIVATED ===");
+    Serial2.println("Time: " + String(millis()) + "ms");
+    Serial2.println("Previous State: " + getStateName(sm.previousState));
+    Serial2.println("Pressure A: " + String(EBS_TANK_PRESSURE_A_value) + " bar");
+    Serial2.println("Pressure B: " + String(EBS_TANK_PRESSURE_B_value) + " bar");
+    Serial2.println("ASMS Status: " + String(digitalRead(ASMS) ? "ACTIVE" : "INACTIVE"));
+    Serial2.println("Mission: " + String(mission));
+    Serial2.println("===================================");
+    entryLogged = true;
+  }
+  
+  // IMMEDIATE safety actions
+  ignition_signal = 0;           // Cut ignition immediately
+  digitalWrite(SOLENOID1, HIGH); // Open pressure relief
+  digitalWrite(SOLENOID2, HIGH); // Open pressure relief
+  emergency_flag = 1;            // Set emergency flag
+  
+  // Visual/audio warnings
+  if ((millis() / 200) % 2) {    // Fast blink for urgency
+    digitalWrite(Debug_LED6, HIGH);
+    digitalWrite(YELLOW_LEDS, HIGH);
+  } else {
+    digitalWrite(Debug_LED6, LOW);
+    digitalWrite(YELLOW_LEDS, LOW);
+  }
+  
+  // Auto-transition after emergency procedures are active
+  if (millis() - sm.stateEntryTime > 1000) {
+    entryLogged = false; // Reset for next emergency
+    changeState(STATE_EMERGENCY_ACTIVE);
+  }
+}
+
+void executeStateEmergencyActive() {
+  if ((millis() / 500) % 2) {
+    digitalWrite(Debug_LED6, HIGH);
+  } else {
+    digitalWrite(Debug_LED6, LOW);
+  }
+  
+  ignition_signal = 0;
+  digitalWrite(SOLENOID1, HIGH);
+  digitalWrite(SOLENOID2, HIGH);
+  emergency_flag = 1;
+  
+  updatePressureReadings();
+  
+  if (EBS_TANK_PRESSURE_B_value <= 0.5) {
+    sm.pendingEvent = EVENT_PRESSURE_SAFE;
+  }
+}
+
+void executeStateDepressurizing() {
+  if ((millis() / 250) % 2) {
+    digitalWrite(Debug_LED5, HIGH);
+    digitalWrite(Debug_LED6, LOW);
+  } else {
+    digitalWrite(Debug_LED5, LOW);
+    digitalWrite(Debug_LED6, HIGH);
+  }
+  
+  ignition_signal = 0;
+  digitalWrite(SOLENOID1, HIGH);
+  digitalWrite(SOLENOID2, HIGH);
+  
+  updatePressureReadings();
+  
+  if (EBS_TANK_PRESSURE_B_value <= 0.5 && digitalRead(ASMS)) {
+    static unsigned long safeTime = 0;
+    if (safeTime == 0) safeTime = millis();
+    
+    if (millis() - safeTime > 5000) {
+      sm.pendingEvent = EVENT_RECOVERY_REQUEST;
+    }
+  }
+}
+
+void executeStateRecoveryReady() {
+  digitalWrite(Debug_LED4, HIGH);
+  
+  ignition_signal = 0;
+  digitalWrite(SOLENOID1, LOW);
+  digitalWrite(SOLENOID2, LOW);
+  emergency_flag = 0;
+  
+  updatePressureReadings();
+  
+  if (millis() - sm.stateEntryTime > 3000) {
+    changeState(STATE_WAITING_ACTIVATION);
+  }
+}
+
+void executeStateFault() {
+  if ((millis() / 1000) % 2) {
+    digitalWrite(Debug_LED2, HIGH);
+  } else {
+    digitalWrite(Debug_LED2, LOW);
+  }
+  
+  ignition_signal = 0;
+  digitalWrite(SOLENOID1, HIGH);
+  digitalWrite(SOLENOID2, HIGH);
+  
+  updatePressureReadings();
+  
+  if (digitalRead(ASMS) && checkCANHealth()) {
+    static unsigned long recoveryTime = 0;
+    if (recoveryTime == 0) recoveryTime = millis();
+    
+    if (millis() - recoveryTime > 10000) {
+      changeState(STATE_WAITING_ACTIVATION);
+    }
+  }
+}
+
+void executeStateMaintenance() {
+  digitalWrite(Debug_LED3, HIGH);
+  digitalWrite(Debug_LED5, HIGH);
+  
+  updatePressureReadings();
+  
+  if (digitalRead(MS_BUTTON1) || (millis() - sm.stateEntryTime > 30000)) {
+    changeState(STATE_WAITING_ACTIVATION);
+  }
+}
+
+void handleStateTransitions() {
+  switch (sm.currentState) {
+    case STATE_INIT:
+      if (sm.pendingEvent == EVENT_INIT_COMPLETE) {
+        changeState(STATE_WAITING_ACTIVATION);
+      }
+      break;
+      
+    case STATE_WAITING_ACTIVATION:
+      if (sm.pendingEvent == EVENT_CAN_READY) {
+        changeState(STATE_PRESSURE_CHECK);
+      }
+      break;
+      
+    case STATE_PRESSURE_CHECK:
+      if (sm.pendingEvent == EVENT_PRESSURE_OK) {
+        changeState(STATE_OPERATIONAL);
+      } else if (sm.pendingEvent == EVENT_PRESSURE_LOW) {
+        changeState(STATE_EMERGENCY_ENTRY);
+      }
+      break;
+      
+    case STATE_OPERATIONAL:
+      if (sm.pendingEvent == EVENT_EMERGENCY_TRIGGER) {
+        changeState(STATE_EMERGENCY_ENTRY);
+      } else if (sm.pendingEvent == EVENT_ASMS_INACTIVE) {
+        changeState(STATE_FAULT);
+      }
+      break;
+      
+    case STATE_EMERGENCY_ACTIVE:
+      if (sm.pendingEvent == EVENT_PRESSURE_SAFE) {
+        changeState(STATE_DEPRESSURIZING);
+      }
+      break;
+      
+    case STATE_DEPRESSURIZING:
+      if (sm.pendingEvent == EVENT_RECOVERY_REQUEST) {
+        changeState(STATE_RECOVERY_READY);
+      }
+      break;
+      
+    case STATE_EMERGENCY_ENTRY:
+        // Handle emergency entry
+        break;
+        
+    case STATE_RECOVERY_READY:
+        // Handle recovery ready
+        break;
+        
+    case STATE_FAULT:
+        // Handle fault state
+        break;
+        
+    case STATE_MAINTENANCE:
+        // Handle maintenance state
+        break;
+        
+    default:
+        break;
+  }
+  
+  sm.pendingEvent = EVENT_NONE;
+}
+
+void updateSystemInputs() {
+  static unsigned long lastUpdate = 0;
+  if (millis() - lastUpdate >= 100) {
+    Pressure_readings();
+    lastUpdate = millis();
+  }
+}
+
+void processSystemEvents() {
+  // Add event processing logic here
+}
+
+void updateIgnitionControl() {
+  if (digitalRead(IGN_PIN) && ign_en && !emergency_flag) {
+    ignition_signal = 1;
+  } else {
+    ignition_signal = 0;
+  }
+}
+
+bool checkCANHealth() {
+  return true; // Implement CAN health check
+}
+
+void feedWatchdogs() {
+  static unsigned long lastFeed = 0;
+  if (millis() - lastFeed >= 500) {
+    wdt_software.feed();
+    wdt_seq.feed();
+    lastFeed = millis();
+  }
+}
+
+void initializeHardware() {
+  pinMode(SOLENOID1, OUTPUT);
+  pinMode(SOLENOID2, OUTPUT);
   pinMode(HB_LED, OUTPUT);
   pinMode(Debug_LED2, OUTPUT);
   pinMode(Debug_LED3, OUTPUT);
   pinMode(Debug_LED4, OUTPUT);
   pinMode(Debug_LED5, OUTPUT);
   pinMode(Debug_LED6, OUTPUT);
-
-  pinMode(EBS_TANK_PRESSURE_A, INPUT);
-  pinMode(EBS_TANK_PRESSURE_B, INPUT);
-  pinMode(EBS_VALLVE_A, INPUT);
-  pinMode(EBS_VALLVE_B, INPUT);
-
-  pinMode(R2D_PIN, INPUT);
-
-  // pinMode(LED_PIN, OUTPUT);
-  pinMode(WDT, OUTPUT);
-
-  pinMode(ASMS, INPUT);
-  pinMode(IGN_PIN, INPUT);
-
-  pinMode(SOLENOID1, OUTPUT);
-  pinMode(SOLENOID2, OUTPUT);
-
-  digitalWrite(SOLENOID1, 0);
-  digitalWrite(SOLENOID2, 0);
-
-  Serial2.begin(115200);
-  Serial.begin(115200);
-
-#if SERIAL_DEBUG
-
-#endif
-
-// CAN_TIMER.begin(send_can_msg,200000);  // 200ms // tempo em us
-#if Pressure_readings_enable
-  PRESSURE_TIMER.begin(Pressure_readings, 100000); // 100ms
-#endif
- CAN_TO_VCU.begin(send_can_msg, 100000);      // 100ms
-  // CAN_TO_VCU.begin(send_can_msg, 200000);  // 200ms
-  // CAN_TO_VCU.begin(send_can_msg, 500000);  // 500ms
-  // CAN_TO_VCU.begin(send_can_msg, 1000000); // 1s   
+  pinMode(YELLOW_LEDS, OUTPUT);
+  pinMode(BLUE_LEDS, OUTPUT);
+  pinMode(ASMS, INPUT_PULLUP);
+  pinMode(IGN_PIN, INPUT_PULLUP);
+  pinMode(MS_BUTTON1, INPUT_PULLUP);
+  
+  digitalWrite(SOLENOID1, LOW);
+  digitalWrite(SOLENOID2, LOW);
+  digitalWrite(YELLOW_LEDS, LOW);
+  digitalWrite(BLUE_LEDS, LOW);
+  reset_debug_leds();
 }
 
-void MS_INT()
-{
-  mission_debounce = millis();
-  while (millis() - mission_debounce < 150)
-  {
-   /* if (watchdog_time + 10 <= millis())
-    {
-      watchdog_time = millis();
-      digitalWrite(WDT, !digitalRead(WDT));
-      watchdog_time = millis();
-    }*/
-  }
-  if (digitalRead(MS_BUTTON1) == 0)
-  {
-    mission_flag++;
-    if (mission_flag > 6)
-    {
-      mission_flag = 0;
-    }
-  }
-}
-
-void IGN_INT()
-{
-  unsigned long IGN_debounce = millis();
-  while (millis() - IGN_debounce < 200)
-  {
-    /*if (watchdog_time + 10 <= millis())
-    {
-      watchdog_time = millis();
-      digitalWrite(WDT, !digitalRead(WDT));
-      watchdog_time = millis();
-    }*/
-  }
-  if (digitalRead(IGN_PIN) == 1 && ign_en == 1)
-  {
-    ignition_signal = 1;
-  }
-  else
-  {
-    ignition_signal = 0;
+void updatePressureReadings() {
+  static unsigned long lastUpdate = 0;
+  if (millis() - lastUpdate >= 300) {
+    median_pressures();
+    lastUpdate = millis();
   }
 }
 
@@ -602,3 +743,63 @@ void send_can_msg() {
   CAN_MSG_SEND(IGN_TO_ACU, 1, status_data);
 
 }
+
+void checkGlobalEmergencyConditions() {
+  // Priority 1: CAN Emergency Override
+  if (Received_CAN_MSG.id == RES_ID && Received_CAN_MSG.buf[1] == 0) {
+    Serial2.println("CAN EMERGENCY OVERRIDE - RES byte 1 = 0");
+    sm.pendingEvent = EVENT_CAN_EMERGENCY_OVERRIDE;
+    return; // Exit immediately - highest priority
+  }
+  
+  // Priority 2: Critical Pressure Drop (works in ALL states)
+  if (EBS_TANK_PRESSURE_B_value < TANK_PRESSURE_THRESHOLD) {
+    Serial2.println("PRESSURE EMERGENCY - Current: " + String(EBS_TANK_PRESSURE_B_value) + 
+                    " bar, Threshold: " + String(TANK_PRESSURE_THRESHOLD) + " bar");
+    sm.pendingEvent = EVENT_EMERGENCY_TRIGGER;
+    return;
+  }
+  
+  // Priority 3: ASMS Emergency Shutdown (if system is running)
+  if (!digitalRead(ASMS) && (sm.currentState == STATE_OPERATIONAL || 
+                            sm.currentState == STATE_PRESSURE_CHECK)) {
+    Serial2.println("ASMS EMERGENCY SHUTDOWN - Switch deactivated during operation");
+    sm.pendingEvent = EVENT_EMERGENCY_TRIGGER;
+    return;
+  }
+  
+  // Priority 4: Critical sensor failures
+  if (EBS_TANK_PRESSURE_B_value < 0 || EBS_TANK_PRESSURE_B_value > 15.0) {
+    Serial2.println("SENSOR EMERGENCY - Invalid pressure reading: " + String(EBS_TANK_PRESSURE_B_value));
+    sm.pendingEvent = EVENT_EMERGENCY_TRIGGER;
+    return;
+  }
+  
+  // Priority 5: Communication timeout (if system is operational)
+  static unsigned long lastCANMessage = 0;
+  if (Received_CAN_MSG.id == RES_ID) {
+    lastCANMessage = millis();
+  }
+  
+  if (sm.currentState == STATE_OPERATIONAL && 
+      millis() - lastCANMessage > 5000) { // 5 second timeout
+    Serial2.println("CAN TIMEOUT EMERGENCY - No RES messages for 5 seconds");
+    sm.pendingEvent = EVENT_EMERGENCY_TRIGGER;
+    return;
+  }
+  
+  // Priority 6: Multiple simultaneous faults
+  static uint8_t faultCount = 0;
+  faultCount = 0;
+  
+  if (EBS_TANK_PRESSURE_A_value < TANK_PRESSURE_THRESHOLD) faultCount++;
+  if (EBS_TANK_PRESSURE_B_value < TANK_PRESSURE_THRESHOLD) faultCount++;
+  if (!digitalRead(ASMS)) faultCount++;
+  
+  if (faultCount >= 2) {
+    Serial2.println("MULTIPLE FAULT EMERGENCY - " + String(faultCount) + " simultaneous faults");
+    sm.pendingEvent = EVENT_EMERGENCY_TRIGGER;
+    return;
+  }
+}
+

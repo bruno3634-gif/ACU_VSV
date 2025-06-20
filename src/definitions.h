@@ -1,3 +1,7 @@
+#ifndef DEFINITIONS_H
+#define DEFINITIONS_H
+
+#include <Arduino.h>
 
 #if PCB == 1
 
@@ -113,4 +117,56 @@
 #define VCU_IGN 0x71        // -> Envio para te dizer para abrir os contactores  1º byte -> 0 -> Ignição desligada 1 -> Ignição ligada
 #define JETSON_AMS 0x502
 #define IGN_FROM_VCU 0x81   // -> Envias para me dizer que os contactores estão fechados 1º byte -> 0 -> Contactores abertos 1 -> Contactores fechados
-#define IGN_TO_ACU 0x512     
+#define IGN_TO_ACU 0x512
+
+enum SystemState {
+  STATE_INIT,                 // System initialization
+  STATE_WAITING_ACTIVATION,   // Waiting for CAN + ASMS
+  STATE_PRESSURE_CHECK,       // Initial pressure validation
+  STATE_OPERATIONAL,          // Normal operation
+  STATE_EMERGENCY_ENTRY,      // Entering emergency mode
+  STATE_EMERGENCY_ACTIVE,     // Emergency mode active
+  STATE_DEPRESSURIZING,       // Waiting for safe pressure
+  STATE_RECOVERY_READY,       // Ready to recover from emergency
+  STATE_FAULT,                // System fault
+  STATE_MAINTENANCE          // Maintenance mode
+};
+
+typedef enum {
+    EVENT_NONE = 0,
+    EVENT_INIT_COMPLETE,
+    EVENT_CAN_READY,
+    EVENT_PRESSURE_OK,
+    EVENT_PRESSURE_LOW,
+    EVENT_PRESSURE_SAFE,
+    EVENT_PRESSURE_LOSS,
+    EVENT_EMERGENCY_STOP,
+    EVENT_EMERGENCY_TRIGGER,
+    EVENT_ASMS_INACTIVE,
+    EVENT_RECOVERY_REQUEST,
+    EVENT_CAN_EMERGENCY_OVERRIDE,
+    EVENT_SYSTEM_FAULT
+} SystemEvent;
+
+struct StateMachine {
+  SystemState currentState;
+  SystemState previousState;
+  unsigned long stateEntryTime;
+  unsigned long lastHeartbeat;
+  bool stateChanged;
+  SystemEvent pendingEvent;
+};
+
+// Function declarations
+void changeState(SystemState newState);
+void handleHeartbeat();
+void executeCurrentState();
+void handleStateTransitions();
+void updateSystemInputs();
+void processSystemEvents();
+void feedWatchdogs();
+void initializeHardware();
+String getStateName(SystemState state);
+void onStateEntry(SystemState state);
+
+#endif // DEFINITIONS_H
