@@ -111,6 +111,6 @@
 #define ACU_MS 0x51
 #define JETSON_MS 0x61
 #define VCU_IGN 0x71        // -> Envio para te dizer para abrir os contactores  1º byte -> 0 -> Ignição desligada 1 -> Ignição ligada
-#define JETSON_AMS 0x502
+#define JETSON_AMS 0x503
 #define IGN_FROM_VCU 0x81   // -> Envias para me dizer que os contactores estão fechados 1º byte -> 0 -> Contactores abertos 1 -> Contactores fechados
-#define IGN_TO_ACU 0x512     
+#define IGN_TO_ACU 0x513     

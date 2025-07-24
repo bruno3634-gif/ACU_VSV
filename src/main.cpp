@@ -109,6 +109,8 @@ void setup()
 
   }
 
+  delay(200); // Wait for the system to stabilize
+
   wdt_software.begin(config);  
   wdt_software.feed();                               
   // wait for res
@@ -155,7 +157,7 @@ void setup()
       DEBUG_TIME = millis();
     }
 #endif
-
+    median_pressures();
   } while (Received_CAN_MSG.id != RES_ID || digitalRead(ASMS) == 0);  // switch to || fo vsv
 ign_en = 1;
   //uint8_t sg[] = {0x00};
@@ -170,55 +172,79 @@ ign_en = 1;
 
   //  Waiting for IGNITION SIGNAL
 
-  do{
-    wdt_software.feed();
-    median_pressures();
-  }while(EBS_TANK_PRESSURE_B_value <= TANK_PRESSURE_THRESHOLD);
-
-  while (ignition_signal_flag == 0 || ignition_signal == 0 )
+  while (ignition_signal_flag == 0 || ignition_signal == 0)
   {
-    ASSI(status_ASSI);
-    wdt_software.feed();
-    Received_CAN_MSG = CAN_MSG_RECEIVE();
-    if (Received_CAN_MSG.id == IGN_FROM_VCU)
-    {
-      ignition_signal_flag = Received_CAN_MSG.buf[0];
-    }
-#if Pressure_readings_enable
     median_pressures();
+    wdt_software.feed();
+
+    //if (EBS_TANK_PRESSURE_B_value > TANK_PRESSURE_THRESHOLD)
+    if (EBS_TANK_PRESSURE_B_value > 3.5)
+    {
+
+      ASSI(status_ASSI);
+      wdt_software.feed();
+      Received_CAN_MSG = CAN_MSG_RECEIVE();
+      if (Received_CAN_MSG.id == IGN_FROM_VCU)
+      {
+        if(Received_CAN_MSG.buf[0] == 9){
+          ignition_signal_flag = Received_CAN_MSG.buf[0];
+        }
+        
+      }
+#if Pressure_readings_enable
+      median_pressures();
 #endif
-    if (mission_update + 100 <= millis())
-    {
-      mission_update = millis();
-      //digitalWrite(Debug_LED5, !digitalRead(Debug_LED5));
-    }
+      if (mission_update + 100 <= millis())
+      {
+        mission_update = millis();
+        // digitalWrite(Debug_LED5, !digitalRead(Debug_LED5));
+      }
 
-    // Received_CAN_MSG = CAN_MSG_RECEIVE();
-    if (Received_CAN_MSG.id == JETSON_MS)
-    {
-      mission = Received_CAN_MSG.buf[0];
-      Mission_Select(mission);
-    }
+      // Received_CAN_MSG = CAN_MSG_RECEIVE();
+      if (Received_CAN_MSG.id == JETSON_MS)
+      {
+        mission = Received_CAN_MSG.buf[0];
+        Mission_Select(mission);
+      }
 
-    if (HeartBit + 500 <= millis())
-    {
-      digitalWrite(HB_LED, !digitalRead(HB_LED));
-      //digitalWrite(Debug_LED3, !digitalRead(Debug_LED3));
-      HeartBit = millis();
-    }
-    if (digitalRead(IGN_PIN) == 1)
-    {
-      ignition_signal = 1;
-      //digitalWrite(Debug_LED2, HIGH);
-    }
-    else
-    {
-      ignition_signal = 0;
-      //digitalWrite(Debug_LED2, LOW);
+      if (HeartBit + 500 <= millis())
+      {
+        digitalWrite(HB_LED, !digitalRead(HB_LED));
+        // digitalWrite(Debug_LED3, !digitalRead(Debug_LED3));
+        HeartBit = millis();
+      }
+      if (digitalRead(IGN_PIN) == 1)
+      {
+        ignition_signal = 1;
+        // digitalWrite(Debug_LED2, HIGH);
+      }
+      else
+      {
+        ignition_signal = 0;
+        // digitalWrite(Debug_LED2, LOW);
+      }
     }
   }
 
   detachInterrupt(digitalPinToInterrupt(MS_BUTTON1));
+
+
+
+    wdt_software.feed();
+    digitalWrite(SOLENOID1, 0);
+    digitalWrite(SOLENOID2, 0);
+    delay(1000); // Wait for solenoids to stabilize
+    wdt_software.feed();
+    digitalWrite(SOLENOID1, 1);
+    digitalWrite(SOLENOID2, 1);
+    delay(1000); // Wait for solenoids to stabilize
+    wdt_software.feed();
+    digitalWrite(SOLENOID1, 0);
+    digitalWrite(SOLENOID2, 0);
+
+
+
+
   if (HeartBit + 2000 <= millis())
   {
     digitalWrite(HB_LED, !digitalRead(HB_LED));
@@ -232,8 +258,8 @@ ign_en = 1;
   
   wdt_software.feed();
   reset_debug_leds();
-  digitalWrite(SOLENOID1,LOW);
-  digitalWrite(SOLENOID2,LOW);
+  //digitalWrite(SOLENOID1,LOW);
+  //digitalWrite(SOLENOID2,LOW);
   // detachInterrupt(digitalPinToInterrupt(IGN));
   //digitalWrite(Debug_LED4, HIGH);
 }
@@ -352,8 +378,8 @@ void peripheral_init()
   pinMode(SOLENOID1, OUTPUT);
   pinMode(SOLENOID2, OUTPUT);
 
-  digitalWrite(SOLENOID1, 0);
-  digitalWrite(SOLENOID2, 0);
+  digitalWrite(SOLENOID1, 1);
+  digitalWrite(SOLENOID2, 1);
 
   Serial2.begin(115200);
   Serial.begin(115200);
@@ -474,8 +500,8 @@ void median_pressures() {
      // emergency_flag = 1; // Set emergency flag
     }
     else{
-      digitalWrite(SOLENOID1,LOW);
-      digitalWrite(SOLENOID2,LOW);
+    //  digitalWrite(SOLENOID1,LOW);
+     // digitalWrite(SOLENOID2,LOW);
       ignition_signal_p = 1; // Turn on ignition if pressure is above threshold
     }
     digitalWrite(Debug_LED5, !ignition_signal_p); // Turn off debug LED after reading pressure
@@ -567,7 +593,11 @@ void send_can_msg() {
   static uint8_t reading_index = 0;
   
   // Add new reading to the buffer
-  ignition_readings[reading_index] = digitalRead(IGN_PIN);
+  ///ignition_readings[reading_index] = digitalRead(IGN_PIN);
+
+  ignition_readings[0] = ignition_signal; // Use the current ignition signal
+  ignition_readings[1] = ignition_signal; // Read the pin directly
+  ignition_readings[2] = ignition_signal; // Read the pin directly
   Serial2.println("Ignition reading: " + String(ignition_readings[reading_index]));
   reading_index = (reading_index + 1) % 3;
   
